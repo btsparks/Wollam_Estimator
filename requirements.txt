@@ -1,0 +1,20 @@
+# WEIS - Wollam Estimating Intelligence System
+# Phase 1 Dependencies
+
+# AI / LLM
+anthropic>=0.39.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Database (SQLite is stdlib, but we use this for migrations)
+# No additional DB package needed for SQLite
+
+# CLI Interface
+rich>=13.7.0
+
+# Data Processing
+# (stdlib re, csv, json are sufficient for JCD parsing)
+
+# Testing
+pytest>=8.0.0
