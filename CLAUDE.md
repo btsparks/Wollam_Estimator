@@ -65,3 +65,37 @@ pip install -r requirements.txt
 ## Environment Setup
 - Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`
 - Database path configurable via `WEIS_DB_PATH` env var (default: `data/db/weis.db`)
+
+
+# Claude Code Behavior Rules
+
+## Autonomy — Do Not Stop for Approval
+- Make changes directly without asking for confirmation first
+- Do not pause mid-task to ask "should I continue?" — always continue
+- If you encounter an ambiguous situation, make the most reasonable decision, implement it, and note your reasoning at the end
+- Never ask "would you like me to..." — just do it
+- Complete all steps of a task in a single run before reporting back
+
+## Self-Verification — Check Your Own Work
+- After making code changes, always run the relevant test suite automatically
+- If no test command is obvious, attempt: `npm test`, `pytest`, `cargo test`, or `make test` in that order
+- After running tests, fix any failures before considering the task done
+- Run the linter if one is configured (e.g., `npm run lint`, `ruff check .`, `eslint .`)
+- If a build step exists, run it to confirm nothing is broken
+
+## Git Workflow
+- Use `git status` and `git diff` to understand the current state before starting
+- Make small, focused commits with clear messages as you complete logical chunks
+- Do not ask before committing — commit when a logical unit of work is done
+- Use `git stash` if you need a clean slate temporarily
+
+## Task Approach
+- Break large tasks into steps and work through them sequentially without pausing
+- If a file is too large to read at once, use search tools (grep, glob) to find the relevant sections
+- Prefer editing existing files over creating new ones unless a new file is clearly needed
+- When something doesn't work, try at least 2–3 different approaches before reporting a blocker
+
+## Communication
+- When you finish a task, give a concise summary: what you did, what you tested, and any decisions you made
+- Flag anything genuinely risky or irreversible (e.g., deleting data, modifying production config) before acting — these are the exceptions where pausing is appropriate
+- Keep status updates short — no need to narrate every step

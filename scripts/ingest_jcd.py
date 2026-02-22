@@ -983,7 +983,7 @@ def main():
         if existing:
             print("\nJob 8553 already exists in database. Clearing and re-ingesting...")
             pid = existing["id"]
-            for table in ["general_conditions_breakdown", "benchmark_rates",
+            for table in ["general_conditions_breakdown",
                           "lessons_learned", "subcontractors", "material_costs",
                           "crew_configurations", "production_rates", "unit_costs",
                           "cost_codes", "disciplines"]:

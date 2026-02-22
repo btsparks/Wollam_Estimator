@@ -105,6 +105,12 @@ PROJECT_EXPECTED = {
 }
 
 
+def get_project_id(conn):
+    """Get the project ID for Job 8553 dynamically."""
+    row = conn.execute("SELECT id FROM projects WHERE job_number = '8553'").fetchone()
+    return row["id"] if row else None
+
+
 def validate_project(conn):
     row = conn.execute("SELECT * FROM projects WHERE job_number = '8553'").fetchone()
     if not row:
@@ -140,9 +146,9 @@ DISCIPLINE_EXPECTED = {
 }
 
 
-def validate_disciplines(conn):
+def validate_disciplines(conn, pid):
     rows = conn.execute(
-        "SELECT * FROM disciplines WHERE project_id = 1"
+        "SELECT * FROM disciplines WHERE project_id = ?", (pid,)
     ).fetchall()
 
     if len(rows) != 8:
@@ -220,8 +226,8 @@ SUB_EXPECTED = {
 }
 
 
-def validate_subcontractors(conn):
-    rows = conn.execute("SELECT * FROM subcontractors WHERE project_id = 1").fetchall()
+def validate_subcontractors(conn, pid):
+    rows = conn.execute("SELECT * FROM subcontractors WHERE project_id = ?", (pid,)).fetchall()
     by_name = {r["sub_name"]: r for r in rows}
 
     for name, expected in SUB_EXPECTED.items():
@@ -388,12 +394,12 @@ def validate_referential_integrity(conn):
 # 8. Over-Budget Flags
 # ---------------------------------------------------------------------------
 
-def validate_over_budget_flags(conn):
+def validate_over_budget_flags(conn, pid):
     over_budget = conn.execute("""
         SELECT cost_code, description, budget_cost, actual_cost
         FROM cost_codes
-        WHERE over_budget_flag = 1 AND project_id = 1
-    """).fetchall()
+        WHERE over_budget_flag = 1 AND project_id = ?
+    """, (pid,)).fetchall()
 
     check("Over-budget codes identified", INFO, f"{len(over_budget)} cost codes flagged")
 
@@ -442,17 +448,17 @@ def validate_benchmarks(conn):
 # 10. General Conditions Breakdown Totals
 # ---------------------------------------------------------------------------
 
-def validate_gc_breakdown(conn):
+def validate_gc_breakdown(conn, pid):
     # Sum of GC budget vs discipline budget
     gc_sum = conn.execute("""
         SELECT SUM(budget_cost) as budget_total, SUM(actual_cost) as actual_total
-        FROM general_conditions_breakdown WHERE project_id = 1
-    """).fetchone()
+        FROM general_conditions_breakdown WHERE project_id = ?
+    """, (pid,)).fetchone()
 
     disc_gc = conn.execute("""
         SELECT budget_cost, actual_cost FROM disciplines
-        WHERE discipline_code = 'GCONDITIONS' AND project_id = 1
-    """).fetchone()
+        WHERE discipline_code = 'GCONDITIONS' AND project_id = ?
+    """, (pid,)).fetchone()
 
     if gc_sum and disc_gc:
         # GC breakdown actual should approximate discipline actual
@@ -467,10 +473,11 @@ def validate_gc_breakdown(conn):
 # 11. Cross-Table Consistency: Cost Code MH Sums vs Discipline MH
 # ---------------------------------------------------------------------------
 
-def validate_mh_consistency(conn):
+def validate_mh_consistency(conn, pid):
     """Check if cost code MH sums are reasonable relative to discipline totals."""
     disciplines = conn.execute(
-        "SELECT id, discipline_code, discipline_name, actual_mh FROM disciplines WHERE project_id = 1"
+        "SELECT id, discipline_code, discipline_name, actual_mh FROM disciplines WHERE project_id = ?",
+        (pid,)
     ).fetchall()
 
     for disc in disciplines:
@@ -528,6 +535,13 @@ def main():
 
     conn = get_connection()
     try:
+        pid = get_project_id(conn)
+        if pid is None:
+            check("Project lookup", FAIL, "No project with job_number 8553 found")
+            return sum(1 for _, s, _ in results if s == FAIL)
+
+        print(f"  Project ID: {pid}")
+
         print("\n--- 1. RECORD COUNTS ---")
         validate_record_counts(conn)
 
@@ -535,13 +549,13 @@ def main():
         validate_project(conn)
 
         print("\n--- 3. DISCIPLINE TOTALS ---")
-        validate_disciplines(conn)
+        validate_disciplines(conn, pid)
 
         print("\n--- 4. KEY UNIT COST RATES ---")
         validate_unit_costs(conn)
 
         print("\n--- 5. SUBCONTRACTOR AMOUNTS ---")
-        validate_subcontractors(conn)
+        validate_subcontractors(conn, pid)
 
         print("\n--- 6. DATA COMPLETENESS ---")
         validate_completeness(conn)
@@ -550,16 +564,16 @@ def main():
         validate_referential_integrity(conn)
 
         print("\n--- 8. OVER-BUDGET FLAGS ---")
-        validate_over_budget_flags(conn)
+        validate_over_budget_flags(conn, pid)
 
         print("\n--- 9. BENCHMARK REASONABLENESS ---")
         validate_benchmarks(conn)
 
         print("\n--- 10. GC BREAKDOWN TOTALS ---")
-        validate_gc_breakdown(conn)
+        validate_gc_breakdown(conn, pid)
 
         print("\n--- 11. MH CONSISTENCY ---")
-        validate_mh_consistency(conn)
+        validate_mh_consistency(conn, pid)
 
         print("\n--- 12. CONFIDENCE DISTRIBUTION ---")
         validate_confidence(conn)
