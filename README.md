@@ -50,7 +50,7 @@ weis/
 |-------|----------------|--------|
 | 1 — Data Layer | Database schema, JCD ingestion scripts, data validation | ✅ Complete |
 | 2a — CLI Chat | Terminal chat + Claude API tool-use engine (52 tests passing) | ✅ Complete |
-| 2b — Web Chat | Streamlit web interface (if needed) | 🔲 Not Started |
+| 2b — Web Chat | Streamlit web interface | ✅ Complete |
 | 2.4 — Bid Docs | Active bid document layer + historical cross-reference | 🔲 Not Started |
 | 3 — Command Center | Dashboard UI, workflow tracking, estimate status | 🔲 Not Started |
 | 4 — Agent Layer | Role-based agents, chief estimator orchestration | 🔲 Not Started |
@@ -86,6 +86,10 @@ python scripts/seed_db.py
 
 # Run the CLI chat
 python app/main.py
+
+# Run the web interface
+streamlit run app/web.py
+# Or double-click run_web.bat on Windows
 
 # Run tests
 pytest tests/ -v

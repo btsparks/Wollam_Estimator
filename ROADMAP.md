@@ -18,7 +18,7 @@ Every phase must be fully functional and delivering real value before the next p
 | 0 | Data Collection | Historical JCD library | 🔄 In Progress |
 | 1 | Data Layer | Structured database + ingestion | ✅ Complete |
 | 2a | Conversation Layer — CLI | CLI chat + Claude API tool-use engine | ✅ Complete |
-| 2b | Conversation Layer — Web | Streamlit web interface (if needed) | 🔲 Not Started |
+| 2b | Conversation Layer — Web | Streamlit web interface | ✅ Complete |
 | 2.4 | Active Bid Document Layer | Chat queries both historical + active bid docs | 🔲 Not Started |
 | 3 | Command Center | Dashboard UI + workflow tracking | 🔲 Not Started |
 | 4 | Agent Layer | Role-based agents + orchestration | 🔲 Not Started |
@@ -125,12 +125,14 @@ A simple interface where any team member can ask a question in plain English and
 - Validated: Multi-turn conversation works (follow-up questions)
 - Test coverage: 52 tests passing (32 original + 20 expanded)
 
-**2.3 Chat Interface — Phase 2b: Streamlit (if needed)**
-- Simple web interface
-- Chat history display
-- Source citation display
-- Runs locally on user's machine
-- No authentication required for Phase 2
+**2.3 Chat Interface — Phase 2b: Streamlit — ✅ Complete (February 2026)**
+- Streamlit web interface (`app/web.py`, launched via `run_web.bat`)
+- Chat history with markdown rendering (citations, confidence levels display natively)
+- Sidebar: database status, project cards, discipline breakdown with variance
+- Example question buttons to seed conversation
+- Clear conversation support
+- Graceful degradation without API key (sidebar data still works)
+- Reuses QueryEngine and all 12 tools — no new backend logic
 
 **2.4 Active Bid Document Layer**
 - Simple file intake for active bid RFP documents
