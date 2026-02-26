@@ -238,3 +238,181 @@ def test_mvp_q10_electrical_sf():
     results = query.search_unit_costs(activity="Heavy Industrial Electrical")
     assert len(results) >= 1
     assert results[0]["recommended_rate"] == 138
+
+
+# =========================================================================
+# Discipline-Specific Questions (10)
+# Cover all 8 disciplines + cross-discipline queries
+# =========================================================================
+
+def test_discipline_earthwork_fill_production():
+    """Earthwork: What is the structural fill place & compact production rate?"""
+    results = query.search_production_rates(activity="fill")
+    assert len(results) >= 1
+    fill = [r for r in results if "Fill P/C" in r["activity"]]
+    assert len(fill) >= 1
+    assert fill[0]["recommended_rate"] == 180
+    assert "TON" in fill[0]["production_unit"]
+
+
+def test_discipline_earthwork_tailings_cost():
+    """Earthwork: What did tailings excavation cost per CY (short haul)?"""
+    results = query.search_unit_costs(activity="tailings", discipline="EARTHWORK")
+    assert len(results) >= 1
+    short_haul = [r for r in results if "short" in r["activity"].lower()]
+    assert len(short_haul) >= 1
+    assert short_haul[0]["recommended_rate"] == 1.38
+
+
+def test_discipline_concrete_wall_form_production():
+    """Concrete: What was the wall formwork production rate?"""
+    results = query.search_production_rates(activity="wall form")
+    assert len(results) >= 1
+    assert results[0]["recommended_rate"] == 400
+    assert "SF" in results[0]["production_unit"]
+    assert results[0]["discipline_code"] == "CONCRETE"
+
+
+def test_discipline_concrete_pumping_cost():
+    """Concrete: What did concrete pumping cost per CY?"""
+    results = query.search_unit_costs(activity="Concrete Pumping")
+    assert len(results) >= 1
+    assert results[0]["recommended_rate"] == 17.5
+    assert "CY" in results[0]["unit"]
+
+
+def test_discipline_steel_handrail_rate():
+    """Steel: What was the handrail installation rate?"""
+    results = query.search_unit_costs(activity="Handrail", discipline="STEEL")
+    assert len(results) >= 1
+    assert results[0]["recommended_rate"] == 0.58
+    assert "MH/LF" in results[0]["unit"]
+
+
+def test_discipline_steel_pipe_support():
+    """Steel: What did ground pipe supports cost in MH?"""
+    results = query.search_benchmark_rates(activity="Pipe Support - Ground")
+    assert len(results) >= 1
+    assert results[0]["typical_rate"] == 5.0
+
+
+def test_discipline_piping_field_weld():
+    """Piping: What is the field weld rate for CS 12-24in pipe?"""
+    results = query.search_unit_costs(activity="Field Weld - CS 12-24")
+    assert len(results) >= 1
+    assert results[0]["recommended_rate"] == 16.0
+    assert "MH" in results[0]["unit"]
+
+
+def test_discipline_mechanical_epoxy_grout():
+    """Mechanical: What was the epoxy grout labor rate?"""
+    results = query.search_unit_costs(activity="Epoxy Grout", discipline="MECHANICAL")
+    assert len(results) >= 1
+    grout_labor = [r for r in results if "MH" in r["unit"]]
+    assert len(grout_labor) >= 1
+    assert grout_labor[0]["recommended_rate"] == 50.0
+
+
+def test_discipline_electrical_duct_bank():
+    """Electrical: What did duct bank excavation/backfill cost per LF?"""
+    results = query.search_unit_costs(activity="Duct Bank EX", discipline="ELECTRICAL")
+    assert len(results) >= 1
+    assert results[0]["recommended_rate"] == 10.0
+    assert "LF" in results[0]["unit"]
+
+
+def test_cross_discipline_budget_performance():
+    """Cross-discipline: Which disciplines came in under budget?"""
+    discs = query.get_discipline_summary(job_number="8553")
+    under_budget = [d for d in discs if d.get("variance_pct") and d["variance_pct"] < 0]
+    # Multiple disciplines should be under budget on this CPI=1.37 project
+    assert len(under_budget) >= 4
+
+
+# =========================================================================
+# Lessons Learned & Edge Cases (10)
+# =========================================================================
+
+def test_lesson_wall_supports_over_budget():
+    """Lesson: Steel wall supports went 140% over budget."""
+    results = query.search_lessons_learned(keyword="wall support")
+    assert len(results) >= 1
+    assert results[0]["severity"] == "HIGH"
+    assert results[0]["discipline_code"] == "STEEL"
+
+
+def test_lesson_3_pour_strategy():
+    """Lesson: 3-pour strategy saved ~$1.5M on concrete."""
+    results = query.search_lessons_learned(keyword="pour strategy")
+    assert len(results) >= 1
+    assert results[0]["discipline_code"] == "CONCRETE"
+
+
+def test_lesson_mine_site_training():
+    """Lesson: Mine site training was 380% over budget."""
+    results = query.search_lessons_learned(keyword="training")
+    assert len(results) >= 1
+    assert results[0]["severity"] == "HIGH"
+
+
+def test_lesson_equipment_pad_embeds():
+    """Lesson: Equipment pad embeds add 40-50% to F/S rates."""
+    results = query.search_lessons_learned(keyword="embed")
+    assert len(results) >= 1
+    assert results[0]["category"] == "scope_gap"
+
+
+def test_edge_vendor_search():
+    """Edge: Search materials by vendor name (For-Shor)."""
+    results = query.search_material_costs(vendor="For-Shor")
+    assert len(results) >= 1
+    assert any("For-Shor" in (r.get("vendor") or "") for r in results)
+
+
+def test_edge_gc_management_rate():
+    """Edge: GC management daily rate from unit costs."""
+    results = query.search_unit_costs(activity="Management", discipline="GCONDITIONS")
+    assert len(results) >= 1
+    assert results[0]["recommended_rate"] == 2500.0
+    assert "DAY" in results[0]["unit"]
+
+
+def test_edge_benchmark_rate_range():
+    """Edge: Benchmark rates include low, typical, and high values."""
+    results = query.search_benchmark_rates(activity="wall form")
+    assert len(results) >= 1
+    r = results[0]
+    assert r["low_rate"] is not None
+    assert r["typical_rate"] is not None
+    assert r["high_rate"] is not None
+    assert r["low_rate"] <= r["typical_rate"] <= r["high_rate"]
+
+
+def test_edge_over_budget_cost_codes_count():
+    """Edge: Multiple cost codes went over budget."""
+    results = query.search_cost_codes(over_budget_only=True)
+    assert len(results) >= 5
+    # Every result must have the flag set
+    for r in results:
+        assert r["over_budget_flag"] == 1
+    # Verify they span multiple disciplines
+    disciplines = set(r["discipline_code"] for r in results)
+    assert len(disciplines) >= 2
+
+
+def test_edge_lessons_by_category_scope_gap():
+    """Edge: Filter lessons by scope_gap category."""
+    results = query.search_lessons_learned(category="scope_gap")
+    assert len(results) >= 2
+    for r in results:
+        assert "scope_gap" in r["category"]
+
+
+def test_edge_all_subcontractors():
+    """Edge: Retrieve all subcontractors (no filter)."""
+    results = query.search_subcontractors()
+    assert len(results) == 9
+    names = [r["sub_name"] for r in results]
+    assert "Champion/Iron Mountain" in names
+    assert "Hunt Electric (IES)" in names
+    assert "J&M Steel Solutions" in names

@@ -48,13 +48,13 @@ weis/
 
 | Phase | What Gets Built | Status |
 |-------|----------------|--------|
-| 1 — Data Layer | Database schema, JCD ingestion scripts, data validation | 🔲 Not Started |
-| 2 — Conversation Layer | Chat interface querying historical data | 🔲 Not Started |
+| 1 — Data Layer | Database schema, JCD ingestion scripts, data validation | ✅ Complete |
+| 2a — CLI Chat | Terminal chat + Claude API tool-use engine (52 tests passing) | ✅ Complete |
+| 2b — Web Chat | Streamlit web interface (if needed) | 🔲 Not Started |
+| 2.4 — Bid Docs | Active bid document layer + historical cross-reference | 🔲 Not Started |
 | 3 — Command Center | Dashboard UI, workflow tracking, estimate status | 🔲 Not Started |
 | 4 — Agent Layer | Role-based agents, chief estimator orchestration | 🔲 Not Started |
 | 5 — Full System | RFP intake through proposal, complete lifecycle | 🔲 Not Started |
-
-**Start with Phase 1. Do not skip ahead.**
 
 ---
 
@@ -69,21 +69,26 @@ The following Job Cost Data documents already exist and are ready for ingestion:
 
 ---
 
-## Quick Start (Phase 1)
+## Quick Start
 
 ```bash
-# Clone and set up environment
-git clone [repo]
+# Set up environment
 cd weis
-python -m venv venv
-source venv/bin/activate
+python -m venv .venv
+source .venv/Scripts/activate    # Windows Git Bash
 pip install -r requirements.txt
 
-# Initialize database
+# Copy .env.example to .env and add your Anthropic API key
+cp .env.example .env
+
+# Initialize database (if needed)
 python scripts/seed_db.py
 
-# Test a query
-python scripts/test_query.py "20-inch flanged joint production rate"
+# Run the CLI chat
+python app/main.py
+
+# Run tests
+pytest tests/ -v
 ```
 
 ---

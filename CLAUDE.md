@@ -56,7 +56,9 @@ pip install -r requirements.txt
 5. All query responses include source citations
 
 ## Current Phase
-**Phase 1: Data Layer** — Build database, JCD parser, ingestion pipeline, basic queries.
+**Phase 2a: Conversation Layer — CLI** ✅ Complete
+- 12-tool Claude API integration, Rich CLI, 52 tests passing
+- Next: Phase 2b (Streamlit web UI) or Phase 2.4 (active bid document layer)
 
 ## JCD Data Available
 - Job 8553 (RTK SPD Pump Station): 9 discipline sections + master summary in `data/jcd/`
