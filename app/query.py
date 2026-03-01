@@ -363,6 +363,51 @@ def run_read_query(sql: str) -> list[dict]:
         conn.close()
 
 
+def get_all_projects_with_detail() -> list[dict]:
+    """Get all projects with per-table record counts and discipline list.
+
+    Returns a list of project dicts, each augmented with:
+      - record_counts: {table_name: count} for that project
+      - disciplines: list of discipline dicts with budget/actual/variance
+      - total_records: sum of all record counts
+    """
+    conn = get_connection()
+    try:
+        projects = _rows_to_dicts(conn.execute("SELECT * FROM projects ORDER BY job_number").fetchall())
+
+        child_tables = [
+            "disciplines", "cost_codes", "unit_costs", "production_rates",
+            "crew_configurations", "material_costs", "subcontractors",
+            "lessons_learned", "general_conditions_breakdown",
+        ]
+
+        for proj in projects:
+            pid = proj["id"]
+
+            # Per-table record counts
+            counts = {}
+            for table in child_tables:
+                row = conn.execute(
+                    f"SELECT COUNT(*) as c FROM {table} WHERE project_id = ?", (pid,)
+                ).fetchone()
+                counts[table] = row["c"]
+            proj["record_counts"] = counts
+            proj["total_records"] = sum(counts.values())
+
+            # Discipline breakdown
+            discs = conn.execute(
+                "SELECT discipline_code, discipline_name, budget_cost, actual_cost, "
+                "variance_cost, budget_mh, actual_mh, variance_mh "
+                "FROM disciplines WHERE project_id = ? ORDER BY actual_cost DESC",
+                (pid,),
+            ).fetchall()
+            proj["disciplines_detail"] = _rows_to_dicts(discs)
+
+        return projects
+    finally:
+        conn.close()
+
+
 def get_database_overview() -> dict:
     """Get a summary of all data in the database."""
     conn = get_connection()

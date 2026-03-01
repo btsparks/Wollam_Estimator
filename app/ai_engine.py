@@ -324,7 +324,7 @@ def execute_tool(name: str, input_args: dict) -> str:
 # System Prompt
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are WEIS (Wollam Estimating Intelligence System), an AI assistant for Wollam Construction, a Utah-based industrial heavy civil contractor.
+SYSTEM_PROMPT_TEMPLATE = """You are WEIS (Wollam Estimating Intelligence System), an AI assistant for Wollam Construction, a Utah-based industrial heavy civil contractor.
 
 Your job is to answer questions about historical job cost data from completed projects. You have access to a database containing unit costs, production rates, crew configurations, material costs, subcontractor records, lessons learned, and benchmark rates.
 
@@ -346,11 +346,7 @@ Your job is to answer questions about historical job cost data from completed pr
 
 ## Available Data
 
-The database currently contains data from:
-- Job 8553: RTK SPD Pump Station (Rio Tinto Kennecott, Bingham Canyon, UT)
-  - $35.6M actual cost, 108,889 MH, CPI 1.37
-  - 8 disciplines: Concrete, Earthwork, Structural Steel, Piping, Mechanical Equipment, Electrical, Building Erection, General Conditions
-  - 115 cost codes, 65 unit cost rates, 9 production rates, 6 crew configs, 19 material costs, 9 subcontractors, 15 lessons learned, 21 benchmark rates
+{{AVAILABLE_DATA}}
 
 ## Response Format
 
@@ -361,6 +357,78 @@ Keep responses well-structured. Use this general pattern:
 - Note the confidence level
 - Add relevant context or caveats if important
 """
+
+
+def _build_available_data() -> str:
+    """Query database for all projects and build the Available Data section dynamically."""
+    try:
+        overview = query.get_database_overview()
+    except Exception:
+        return "No data currently loaded in the database."
+
+    projects = overview.get("projects", [])
+    counts = overview.get("record_counts", {})
+
+    if not projects:
+        return "No projects currently loaded in the database."
+
+    lines = ["The database currently contains data from:"]
+
+    for proj in projects:
+        job = proj.get("job_number", "?")
+        name = proj.get("job_name", "Unknown")
+        owner = proj.get("owner", "")
+        cost = proj.get("total_actual_cost")
+        mh = proj.get("total_actual_mh")
+        cpi = proj.get("cpi")
+
+        header = f"- Job {job}: {name}"
+        if owner:
+            header += f" ({owner})"
+        lines.append(header)
+
+        details = []
+        if cost:
+            details.append(f"${cost / 1_000_000:.1f}M actual cost")
+        if mh:
+            details.append(f"{mh:,.0f} MH")
+        if cpi:
+            details.append(f"CPI {cpi:.2f}")
+        if details:
+            lines.append(f"  - {', '.join(details)}")
+
+    # Discipline list
+    discs = overview.get("disciplines", [])
+    if discs:
+        disc_names = [d.get("discipline_name", d.get("discipline_code", "?")) for d in discs]
+        lines.append(f"  - Disciplines: {', '.join(disc_names)}")
+
+    # Aggregate record counts
+    count_parts = []
+    label_map = {
+        "cost_codes": "cost codes",
+        "unit_costs": "unit cost rates",
+        "production_rates": "production rates",
+        "crew_configurations": "crew configs",
+        "material_costs": "material costs",
+        "subcontractors": "subcontractors",
+        "lessons_learned": "lessons learned",
+        "benchmark_rates": "benchmark rates",
+    }
+    for key, label in label_map.items():
+        c = counts.get(key, 0)
+        if c > 0:
+            count_parts.append(f"{c} {label}")
+    if count_parts:
+        lines.append(f"  - {', '.join(count_parts)}")
+
+    return "\n".join(lines)
+
+
+def build_system_prompt() -> str:
+    """Build the full system prompt with dynamic data section."""
+    available = _build_available_data()
+    return SYSTEM_PROMPT_TEMPLATE.replace("{{AVAILABLE_DATA}}", available)
 
 # ---------------------------------------------------------------------------
 # Query Engine
@@ -393,11 +461,13 @@ class QueryEngine:
         """
         self.conversation.append({"role": "user", "content": question})
 
+        system_prompt = build_system_prompt()
+
         for _ in range(MAX_TOOL_ROUNDS):
             response = self.client.messages.create(
                 model=MODEL,
                 max_tokens=2048,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 tools=TOOLS,
                 messages=self.conversation,
             )

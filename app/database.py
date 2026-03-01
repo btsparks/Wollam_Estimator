@@ -281,6 +281,46 @@ def init_db(db_path: Path = None) -> None:
         conn.close()
 
 
+def delete_project_cascade(project_id: int, db_path: Path = None) -> dict:
+    """Delete a project and all its child records.
+
+    Deletes in correct order to respect foreign key constraints.
+    Returns dict with counts of deleted records per table.
+    """
+    conn = get_connection(db_path)
+    try:
+        deleted = {}
+        # Child tables first (order matters for FK constraints)
+        child_tables = [
+            "general_conditions_breakdown",
+            "lessons_learned",
+            "subcontractors",
+            "material_costs",
+            "crew_configurations",
+            "production_rates",
+            "unit_costs",
+            "cost_codes",
+            "disciplines",
+        ]
+        for table in child_tables:
+            cursor = conn.execute(
+                f"DELETE FROM {table} WHERE project_id = ?", (project_id,)
+            )
+            deleted[table] = cursor.rowcount
+
+        # Finally delete the project itself
+        cursor = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        deleted["projects"] = cursor.rowcount
+
+        conn.commit()
+        return deleted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def get_table_counts(db_path: Path = None) -> dict:
     """Return row counts for all tables."""
     conn = get_connection(db_path)
