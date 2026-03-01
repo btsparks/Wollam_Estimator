@@ -408,6 +408,104 @@ def get_all_projects_with_detail() -> list[dict]:
         conn.close()
 
 
+def get_project_records(project_id: int) -> dict[str, list[dict]]:
+    """Get all data records for a project, organized by table.
+
+    Returns a dict keyed by table name, each value a list of record dicts.
+    Joins discipline name onto child records for readability.
+    """
+    conn = get_connection()
+    try:
+        results = {}
+
+        results["cost_codes"] = _rows_to_dicts(conn.execute(
+            "SELECT cc.cost_code, cc.description, cc.unit, "
+            "cc.budget_qty, cc.actual_qty, cc.budget_cost, cc.actual_cost, "
+            "cc.budget_mh, cc.actual_mh, cc.budget_mh_per_unit, cc.actual_mh_per_unit, "
+            "cc.over_budget_flag, d.discipline_name "
+            "FROM cost_codes cc "
+            "LEFT JOIN disciplines d ON cc.discipline_id = d.id "
+            "WHERE cc.project_id = ? ORDER BY d.discipline_name, cc.cost_code",
+            (project_id,),
+        ).fetchall())
+
+        results["unit_costs"] = _rows_to_dicts(conn.execute(
+            "SELECT uc.activity, uc.unit, uc.budget_rate, uc.actual_rate, "
+            "uc.recommended_rate, uc.rate_basis, uc.confidence, "
+            "uc.mh_per_unit_budget, uc.mh_per_unit_actual, uc.project_conditions, "
+            "d.discipline_name "
+            "FROM unit_costs uc "
+            "LEFT JOIN disciplines d ON uc.discipline_id = d.id "
+            "WHERE uc.project_id = ? ORDER BY d.discipline_name, uc.activity",
+            (project_id,),
+        ).fetchall())
+
+        results["production_rates"] = _rows_to_dicts(conn.execute(
+            "SELECT pr.activity, pr.unit, pr.production_unit, "
+            "pr.budget_rate, pr.actual_rate, pr.recommended_rate, "
+            "pr.crew_size, pr.equipment_primary, pr.confidence, "
+            "d.discipline_name "
+            "FROM production_rates pr "
+            "LEFT JOIN disciplines d ON pr.discipline_id = d.id "
+            "WHERE pr.project_id = ? ORDER BY d.discipline_name, pr.activity",
+            (project_id,),
+        ).fetchall())
+
+        results["crew_configurations"] = _rows_to_dicts(conn.execute(
+            "SELECT cr.activity, cr.crew_description, "
+            "cr.foreman, cr.journeyman, cr.apprentice, cr.laborer, "
+            "cr.operator, cr.ironworker, cr.pipefitter, cr.electrician, "
+            "cr.total_crew_size, cr.equipment_list, cr.shift_hours, "
+            "d.discipline_name "
+            "FROM crew_configurations cr "
+            "LEFT JOIN disciplines d ON cr.discipline_id = d.id "
+            "WHERE cr.project_id = ? ORDER BY d.discipline_name, cr.activity",
+            (project_id,),
+        ).fetchall())
+
+        results["material_costs"] = _rows_to_dicts(conn.execute(
+            "SELECT mc.material_type, mc.material_description, mc.vendor, "
+            "mc.unit, mc.quantity, mc.unit_cost, mc.total_cost, "
+            "mc.po_number, d.discipline_name "
+            "FROM material_costs mc "
+            "LEFT JOIN disciplines d ON mc.discipline_id = d.id "
+            "WHERE mc.project_id = ? ORDER BY d.discipline_name, mc.material_type",
+            (project_id,),
+        ).fetchall())
+
+        results["subcontractors"] = _rows_to_dicts(conn.execute(
+            "SELECT s.sub_name, s.scope_description, s.scope_category, "
+            "s.contract_amount, s.actual_amount, s.unit, s.quantity, s.unit_cost, "
+            "s.performance_rating, s.would_use_again, d.discipline_name "
+            "FROM subcontractors s "
+            "LEFT JOIN disciplines d ON s.discipline_id = d.id "
+            "WHERE s.project_id = ? ORDER BY d.discipline_name, s.sub_name",
+            (project_id,),
+        ).fetchall())
+
+        results["lessons_learned"] = _rows_to_dicts(conn.execute(
+            "SELECT ll.category, ll.severity, ll.title, ll.description, "
+            "ll.impact, ll.recommendation, ll.applies_to, d.discipline_name "
+            "FROM lessons_learned ll "
+            "LEFT JOIN disciplines d ON ll.discipline_id = d.id "
+            "WHERE ll.project_id = ? ORDER BY ll.severity DESC, ll.category",
+            (project_id,),
+        ).fetchall())
+
+        results["general_conditions_breakdown"] = _rows_to_dicts(conn.execute(
+            "SELECT gc.category, gc.description, gc.cost_code, "
+            "gc.budget_cost, gc.actual_cost, gc.unit, gc.rate, "
+            "gc.duration, gc.pct_of_total_job "
+            "FROM general_conditions_breakdown gc "
+            "WHERE gc.project_id = ? ORDER BY gc.actual_cost DESC",
+            (project_id,),
+        ).fetchall())
+
+        return results
+    finally:
+        conn.close()
+
+
 def get_database_overview() -> dict:
     """Get a summary of all data in the database."""
     conn = get_connection()

@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import streamlit as st
+import pandas as pd
 from app import query
 from app.database import delete_project_cascade
 
@@ -112,6 +113,37 @@ else:
                         f"Budget: ${budget:,.0f} · Actual: ${actual:,.0f} · "
                         f"Variance: :{color}[${variance:+,.0f}]"
                     )
+
+            # Data browser — expandable tables of actual records
+            st.markdown("---")
+            st.markdown("**Data Browser** — _this is exactly what WEIS sees when answering questions_")
+
+            records = query.get_project_records(proj["id"])
+
+            data_tables = {
+                "cost_codes": "Cost Codes",
+                "unit_costs": "Unit Costs",
+                "production_rates": "Production Rates",
+                "crew_configurations": "Crew Configurations",
+                "material_costs": "Material Costs",
+                "subcontractors": "Subcontractors",
+                "lessons_learned": "Lessons Learned",
+                "general_conditions_breakdown": "GC Breakdown",
+            }
+
+            for table_key, table_label in data_tables.items():
+                rows = records.get(table_key, [])
+                count = len(rows)
+                if count > 0:
+                    with st.expander(f"{table_label} ({count} records)"):
+                        df = pd.DataFrame(rows)
+                        # Clean up column names for display
+                        df.columns = [
+                            c.replace("_", " ").title() for c in df.columns
+                        ]
+                        st.dataframe(df, use_container_width=True, hide_index=True)
+                else:
+                    st.markdown(f"⚫ _{table_label}_ — no records")
 
             # Remove button
             st.markdown("---")
