@@ -10,7 +10,7 @@ from app.config import ANTHROPIC_API_KEY
 from app.database import get_connection
 
 MODEL = "claude-sonnet-4-20250514"
-MAX_TOKENS = 8192
+MAX_TOKENS = 16384
 
 EXTRACTION_SYSTEM_PROMPT = """You are a construction job cost data extraction engine for Wollam Construction.
 
@@ -229,13 +229,17 @@ def extract_jcd(markdown_content: str, filename: str, job_number: str) -> dict:
         )
 
         text = response.content[0].text.strip()
+        stop_reason = response.stop_reason
 
         # Strip markdown fences if Claude wrapped the JSON anyway
         if text.startswith("```"):
             lines = text.split("\n")
-            # Remove first line (```json or ```) and last line (```)
             lines = [l for l in lines if not l.strip().startswith("```")]
             text = "\n".join(lines)
+
+        # If output was truncated (max_tokens hit), try to repair the JSON
+        if stop_reason == "max_tokens":
+            text = _repair_truncated_json(text)
 
         data = json.loads(text)
 
@@ -249,6 +253,37 @@ def extract_jcd(markdown_content: str, filename: str, job_number: str) -> dict:
         return {"error": f"Failed to parse extraction response as JSON: {e}"}
     except Exception as e:
         return {"error": f"Extraction API call failed: {e}"}
+
+
+def _repair_truncated_json(text: str) -> str:
+    """Attempt to repair JSON that was truncated due to max_tokens.
+
+    Closes any open arrays and objects so json.loads() can parse
+    the data that was successfully returned.
+    """
+    # Count open/close braces and brackets
+    open_braces = text.count("{") - text.count("}")
+    open_brackets = text.count("[") - text.count("]")
+
+    # Strip trailing comma or partial key/value
+    text = text.rstrip()
+    while text and text[-1] in (",", ":", '"', " ", "\n"):
+        text = text[:-1].rstrip()
+
+    # If we're mid-string, close it
+    # Count unescaped quotes
+    in_string = False
+    for i, ch in enumerate(text):
+        if ch == '"' and (i == 0 or text[i - 1] != "\\"):
+            in_string = not in_string
+    if in_string:
+        text += '"'
+
+    # Close open brackets then braces
+    text += "]" * max(0, open_brackets)
+    text += "}" * max(0, open_braces)
+
+    return text
 
 
 def validate_extraction(data: dict) -> list[str]:
