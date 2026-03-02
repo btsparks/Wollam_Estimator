@@ -287,6 +287,7 @@ class BidAgent(ABC):
                 progress_callback(f"{self.AGENT_DISPLAY_NAME}: Analyzing documents...")
 
             # Tool-use loop
+            used_all_rounds = False
             for round_num in range(MAX_TOOL_ROUNDS):
                 response = client.messages.create(
                     model=MODEL,
@@ -321,6 +322,30 @@ class BidAgent(ABC):
                     })
 
                 messages.append({"role": "user", "content": tool_results})
+            else:
+                used_all_rounds = True
+
+            # If we exhausted tool rounds, force a final response without tools
+            if used_all_rounds:
+                if progress_callback:
+                    progress_callback(
+                        f"{self.AGENT_DISPLAY_NAME}: Generating final report..."
+                    )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You have used all available search rounds. Based on what you've "
+                        "found so far, produce your final JSON report now. Do not call any "
+                        "more tools — just output the JSON."
+                    ),
+                })
+                response = client.messages.create(
+                    model=MODEL,
+                    max_tokens=MAX_TOKENS,
+                    system=system_prompt,
+                    messages=messages,
+                )
+                total_tokens += response.usage.input_tokens + response.usage.output_tokens
 
             # Extract final text
             text_parts = [b.text for b in response.content if hasattr(b, "text")]
