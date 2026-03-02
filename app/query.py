@@ -506,6 +506,318 @@ def get_project_records(project_id: int) -> dict[str, list[dict]]:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Active Bid Functions (Phase 2.4)
+# ---------------------------------------------------------------------------
+
+
+def get_active_bids(status: str = None) -> list[dict]:
+    """Get all active bids, optionally filtered by status."""
+    conn = get_connection()
+    try:
+        sql = """
+            SELECT ab.*,
+                   (SELECT COUNT(*) FROM bid_documents WHERE bid_id = ab.id) as doc_count,
+                   (SELECT COALESCE(SUM(word_count), 0) FROM bid_documents WHERE bid_id = ab.id) as total_words
+            FROM active_bids ab
+            WHERE 1=1
+        """
+        params = []
+        if status:
+            sql += " AND ab.status = ?"
+            params.append(status)
+        sql += " ORDER BY ab.is_focus DESC, ab.updated_at DESC"
+        return _rows_to_dicts(conn.execute(sql, params).fetchall())
+    finally:
+        conn.close()
+
+
+def get_focus_bid() -> dict | None:
+    """Get the currently focused bid, or None."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM active_bids WHERE is_focus = 1"
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_focus_bid(bid_id: int) -> None:
+    """Set a bid as the focus bid (clears any existing focus)."""
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE active_bids SET is_focus = 0 WHERE is_focus = 1")
+        conn.execute(
+            "UPDATE active_bids SET is_focus = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (bid_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_focus_bid() -> None:
+    """Clear the focus bid."""
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE active_bids SET is_focus = 0 WHERE is_focus = 1")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_active_bid(bid_name: str, bid_number: str = None, owner: str = None,
+                      general_contractor: str = None, bid_date: str = None,
+                      project_type: str = None, location: str = None,
+                      estimated_value: float = None, notes: str = None) -> int:
+    """Create a new active bid. Returns the new bid ID."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """INSERT INTO active_bids
+               (bid_name, bid_number, owner, general_contractor, bid_date,
+                project_type, location, estimated_value, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (bid_name, bid_number, owner, general_contractor, bid_date,
+             project_type, location, estimated_value, notes),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_bid_cascade(bid_id: int) -> dict:
+    """Delete a bid and all its documents, chunks, and agent reports.
+
+    Returns dict with counts of deleted records.
+    """
+    conn = get_connection()
+    try:
+        deleted = {}
+
+        # Delete agent reports (may not exist on older schemas)
+        try:
+            cursor = conn.execute(
+                "DELETE FROM agent_reports WHERE bid_id = ?", (bid_id,)
+            )
+            deleted["agent_reports"] = cursor.rowcount
+        except Exception:
+            deleted["agent_reports"] = 0
+
+        cursor = conn.execute(
+            "DELETE FROM bid_document_chunks WHERE bid_id = ?", (bid_id,)
+        )
+        deleted["chunks"] = cursor.rowcount
+
+        cursor = conn.execute(
+            "DELETE FROM bid_documents WHERE bid_id = ?", (bid_id,)
+        )
+        deleted["documents"] = cursor.rowcount
+
+        cursor = conn.execute(
+            "DELETE FROM active_bids WHERE id = ?", (bid_id,)
+        )
+        deleted["bids"] = cursor.rowcount
+
+        conn.commit()
+        return deleted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def insert_bid_document(bid_id: int, filename: str, file_type: str,
+                        file_size_bytes: int = None, doc_category: str = "general",
+                        doc_label: str = None, extraction_status: str = "pending",
+                        extraction_warning: str = None, page_count: int = None,
+                        word_count: int = None) -> int:
+    """Insert a bid document record. Returns the new document ID."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """INSERT INTO bid_documents
+               (bid_id, filename, file_type, file_size_bytes, doc_category,
+                doc_label, extraction_status, extraction_warning, page_count, word_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (bid_id, filename, file_type, file_size_bytes, doc_category,
+             doc_label, extraction_status, extraction_warning, page_count, word_count),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def insert_bid_chunks(document_id: int, bid_id: int, chunks: list[dict]) -> int:
+    """Insert text chunks for a bid document. Returns number inserted."""
+    conn = get_connection()
+    try:
+        for chunk in chunks:
+            conn.execute(
+                """INSERT INTO bid_document_chunks
+                   (document_id, bid_id, chunk_index, chunk_text, section_heading)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (document_id, bid_id, chunk["chunk_index"],
+                 chunk["chunk_text"], chunk.get("section_heading")),
+            )
+        conn.commit()
+        return len(chunks)
+    finally:
+        conn.close()
+
+
+def get_bid_documents(bid_id: int) -> list[dict]:
+    """Get all documents for a bid."""
+    conn = get_connection()
+    try:
+        return _rows_to_dicts(conn.execute(
+            """SELECT bd.*, ab.bid_name
+               FROM bid_documents bd
+               JOIN active_bids ab ON bd.bid_id = ab.id
+               WHERE bd.bid_id = ?
+               ORDER BY bd.created_at DESC""",
+            (bid_id,),
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+def search_bid_documents(query_text: str, bid_id: int = None,
+                         doc_category: str = None,
+                         limit: int = 20) -> list[dict]:
+    """Search bid document chunks by keyword.
+
+    If bid_id is None, defaults to the focus bid.
+    Returns matching chunks with document and bid context.
+    """
+    conn = get_connection()
+    try:
+        # Default to focus bid if none specified
+        if bid_id is None:
+            focus = conn.execute(
+                "SELECT id FROM active_bids WHERE is_focus = 1"
+            ).fetchone()
+            if focus:
+                bid_id = focus["id"]
+            else:
+                return []
+
+        sql = """
+            SELECT c.chunk_text, c.section_heading, c.chunk_index,
+                   d.filename, d.doc_category, d.doc_label,
+                   b.bid_name, b.bid_number, b.id as bid_id
+            FROM bid_document_chunks c
+            JOIN bid_documents d ON c.document_id = d.id
+            JOIN active_bids b ON c.bid_id = b.id
+            WHERE c.bid_id = ?
+              AND c.chunk_text LIKE ?
+        """
+        params = [bid_id, f"%{query_text}%"]
+
+        if doc_category:
+            sql += " AND d.doc_category = ?"
+            params.append(doc_category)
+
+        sql += f" ORDER BY c.chunk_index LIMIT {limit}"
+        return _rows_to_dicts(conn.execute(sql, params).fetchall())
+    finally:
+        conn.close()
+
+
+def get_bid_overview(bid_id: int = None) -> dict:
+    """Get document count, categories, word count for a bid.
+
+    If bid_id is None, defaults to the focus bid.
+    """
+    conn = get_connection()
+    try:
+        if bid_id is None:
+            focus = conn.execute(
+                "SELECT id FROM active_bids WHERE is_focus = 1"
+            ).fetchone()
+            if focus:
+                bid_id = focus["id"]
+            else:
+                return {"error": "No focus bid set and no bid_id specified."}
+
+        bid = conn.execute(
+            "SELECT * FROM active_bids WHERE id = ?", (bid_id,)
+        ).fetchone()
+        if not bid:
+            return {"error": f"Bid {bid_id} not found."}
+
+        docs = conn.execute(
+            """SELECT doc_category, COUNT(*) as count,
+                      COALESCE(SUM(word_count), 0) as words
+               FROM bid_documents WHERE bid_id = ?
+               GROUP BY doc_category""",
+            (bid_id,),
+        ).fetchall()
+
+        total_docs = conn.execute(
+            "SELECT COUNT(*) as c FROM bid_documents WHERE bid_id = ?", (bid_id,)
+        ).fetchone()
+
+        total_chunks = conn.execute(
+            "SELECT COUNT(*) as c FROM bid_document_chunks WHERE bid_id = ?", (bid_id,)
+        ).fetchone()
+
+        total_words = conn.execute(
+            "SELECT COALESCE(SUM(word_count), 0) as w FROM bid_documents WHERE bid_id = ?",
+            (bid_id,),
+        ).fetchone()
+
+        return {
+            "bid_id": bid_id,
+            "bid_name": bid["bid_name"],
+            "bid_number": bid["bid_number"],
+            "owner": bid["owner"],
+            "general_contractor": bid["general_contractor"],
+            "bid_date": bid["bid_date"],
+            "status": bid["status"],
+            "total_documents": total_docs["c"],
+            "total_chunks": total_chunks["c"],
+            "total_words": total_words["w"],
+            "categories": _rows_to_dicts(docs),
+        }
+    finally:
+        conn.close()
+
+
+def delete_bid_document(document_id: int) -> dict:
+    """Delete a single bid document and its chunks."""
+    conn = get_connection()
+    try:
+        deleted = {}
+        cursor = conn.execute(
+            "DELETE FROM bid_document_chunks WHERE document_id = ?", (document_id,)
+        )
+        deleted["chunks"] = cursor.rowcount
+
+        cursor = conn.execute(
+            "DELETE FROM bid_documents WHERE id = ?", (document_id,)
+        )
+        deleted["documents"] = cursor.rowcount
+
+        conn.commit()
+        return deleted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Database Overview
+# ---------------------------------------------------------------------------
+
+
 def get_database_overview() -> dict:
     """Get a summary of all data in the database."""
     conn = get_connection()
@@ -538,5 +850,192 @@ def get_database_overview() -> dict:
         overview["disciplines"] = _rows_to_dicts(discs)
 
         return overview
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Read Document Chunks (Phase 3 — Agent Tool)
+# ---------------------------------------------------------------------------
+
+
+def read_document_chunks(bid_id: int = None, document_id: int = None,
+                         start_chunk: int = 0, max_chunks: int = 5) -> list[dict]:
+    """Read sequential chunks from bid documents.
+
+    Lets agents read document sections in order, not just keyword search.
+    Capped at 10 chunks per call to manage context size.
+
+    Args:
+        bid_id: Bid to read from. Defaults to focus bid.
+        document_id: Specific document to read. If None, reads all docs for the bid.
+        start_chunk: Starting chunk index (0-based).
+        max_chunks: Number of chunks to return (capped at 10).
+    """
+    max_chunks = min(max_chunks, 10)
+    conn = get_connection()
+    try:
+        if bid_id is None:
+            focus = conn.execute(
+                "SELECT id FROM active_bids WHERE is_focus = 1"
+            ).fetchone()
+            if focus:
+                bid_id = focus["id"]
+            else:
+                return []
+
+        sql = """
+            SELECT c.chunk_index, c.chunk_text, c.section_heading,
+                   d.filename, d.doc_category, d.doc_label
+            FROM bid_document_chunks c
+            JOIN bid_documents d ON c.document_id = d.id
+            WHERE c.bid_id = ?
+        """
+        params: list = [bid_id]
+
+        if document_id is not None:
+            sql += " AND c.document_id = ?"
+            params.append(document_id)
+
+        sql += " ORDER BY d.id, c.chunk_index LIMIT ? OFFSET ?"
+        params.extend([max_chunks, start_chunk])
+
+        return _rows_to_dicts(conn.execute(sql, params).fetchall())
+    finally:
+        conn.close()
+
+
+def get_bid_documents_list(bid_id: int = None) -> list[dict]:
+    """Get document list for a bid (lightweight, for agent context).
+
+    Returns id, filename, doc_category, doc_label, word_count per doc.
+    Defaults to focus bid.
+    """
+    conn = get_connection()
+    try:
+        if bid_id is None:
+            focus = conn.execute(
+                "SELECT id FROM active_bids WHERE is_focus = 1"
+            ).fetchone()
+            if focus:
+                bid_id = focus["id"]
+            else:
+                return []
+
+        return _rows_to_dicts(conn.execute(
+            """SELECT id, filename, doc_category, doc_label, word_count,
+                      page_count, extraction_status
+               FROM bid_documents WHERE bid_id = ?
+               ORDER BY doc_category, filename""",
+            (bid_id,),
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Agent Report CRUD (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def upsert_agent_report(bid_id: int, agent_name: str, **kwargs) -> int:
+    """Insert or update an agent report.
+
+    Uses the unique constraint on (bid_id, agent_name) to upsert.
+    Returns the report ID.
+
+    Accepted kwargs: agent_version, status, report_json, summary_text,
+    risk_rating, flags_count, input_doc_count, input_chunk_count,
+    tokens_used, duration_seconds, error_message.
+    """
+    conn = get_connection()
+    try:
+        # Check if report exists
+        existing = conn.execute(
+            "SELECT id FROM agent_reports WHERE bid_id = ? AND agent_name = ?",
+            (bid_id, agent_name),
+        ).fetchone()
+
+        if existing:
+            # Update
+            set_parts = ["updated_at = CURRENT_TIMESTAMP"]
+            params = []
+            for key, val in kwargs.items():
+                set_parts.append(f"{key} = ?")
+                params.append(val)
+            params.extend([bid_id, agent_name])
+            conn.execute(
+                f"UPDATE agent_reports SET {', '.join(set_parts)} "
+                "WHERE bid_id = ? AND agent_name = ?",
+                params,
+            )
+            conn.commit()
+            return existing["id"]
+        else:
+            # Insert
+            cols = ["bid_id", "agent_name"] + list(kwargs.keys())
+            placeholders = ["?"] * len(cols)
+            vals = [bid_id, agent_name] + list(kwargs.values())
+            cursor = conn.execute(
+                f"INSERT INTO agent_reports ({', '.join(cols)}) "
+                f"VALUES ({', '.join(placeholders)})",
+                vals,
+            )
+            conn.commit()
+            return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_agent_reports(bid_id: int) -> list[dict]:
+    """Get all agent reports for a bid."""
+    conn = get_connection()
+    try:
+        return _rows_to_dicts(conn.execute(
+            "SELECT * FROM agent_reports WHERE bid_id = ? ORDER BY agent_name",
+            (bid_id,),
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+def get_agent_report(bid_id: int, agent_name: str) -> dict | None:
+    """Get a single agent report by bid and agent name."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_reports WHERE bid_id = ? AND agent_name = ?",
+            (bid_id, agent_name),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_agent_status(bid_id: int, agent_name: str, status: str,
+                        error_message: str = None) -> None:
+    """Update just the status (and optional error) of an agent report."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE agent_reports SET status = ?, error_message = ?, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE bid_id = ? AND agent_name = ?",
+            (status, error_message, bid_id, agent_name),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_agent_reports(bid_id: int) -> int:
+    """Delete all agent reports for a bid. Returns count deleted."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM agent_reports WHERE bid_id = ?", (bid_id,)
+        )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()

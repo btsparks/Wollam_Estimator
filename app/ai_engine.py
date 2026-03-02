@@ -286,6 +286,93 @@ TOOLS = [
             "required": [],
         },
     },
+    # --- Active Bid Document Tools (Phase 2.4) ---
+    {
+        "name": "search_bid_documents",
+        "description": (
+            "Search the text of uploaded bid documents (RFPs, specs, addenda, scope docs) for keywords. "
+            "Use this when the user asks about bid scope, RFP requirements, spec details, "
+            "or anything about the current bid documents. "
+            "Defaults to the focus bid if no bid_id is specified."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query_text": {
+                    "type": "string",
+                    "description": "Keywords to search for in bid document text. Examples: 'concrete', 'pipe support spacing', 'liquidated damages'"
+                },
+                "bid_id": {
+                    "type": "integer",
+                    "description": "Specific bid ID to search. If omitted, searches the focus bid."
+                },
+                "doc_category": {
+                    "type": "string",
+                    "description": "Filter by document category: rfp, addendum, specification, scope, bid_form, schedule, general"
+                },
+            },
+            "required": ["query_text"],
+        },
+    },
+    {
+        "name": "read_document_chunks",
+        "description": (
+            "Read sequential chunks from bid documents. Use this to read through "
+            "document sections in order (e.g., read the first 5 chunks of a spec, "
+            "then the next 5). Max 10 chunks per call."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bid_id": {
+                    "type": "integer",
+                    "description": "Bid ID. If omitted, uses the focus bid.",
+                },
+                "document_id": {
+                    "type": "integer",
+                    "description": "Specific document ID to read. If omitted, reads all docs.",
+                },
+                "start_chunk": {
+                    "type": "integer",
+                    "description": "Starting chunk index (0-based). Default 0.",
+                },
+                "max_chunks": {
+                    "type": "integer",
+                    "description": "Number of chunks to return (max 10). Default 5.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_bid_overview",
+        "description": (
+            "Get an overview of a bid's uploaded documents: document count, categories, total word count. "
+            "Use this when the user asks what documents are uploaded for a bid, or for bid status."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bid_id": {
+                    "type": "integer",
+                    "description": "Bid ID to get overview for. If omitted, uses the focus bid."
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_active_bids",
+        "description": (
+            "List all active bids with their status, owner, GC, and document count. "
+            "Use this when the user asks what bids are in the system or wants to see all active bids."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -305,6 +392,11 @@ TOOL_FUNCTIONS = {
     "get_discipline_summary": query.get_discipline_summary,
     "get_gc_breakdown": query.get_gc_breakdown,
     "get_database_overview": query.get_database_overview,
+    # Phase 2.4 — Active Bid Documents
+    "search_bid_documents": query.search_bid_documents,
+    "read_document_chunks": query.read_document_chunks,
+    "get_bid_overview": query.get_bid_overview,
+    "list_active_bids": lambda: query.get_active_bids(),
 }
 
 
@@ -326,7 +418,7 @@ def execute_tool(name: str, input_args: dict) -> str:
 
 SYSTEM_PROMPT_TEMPLATE = """You are WEIS (Wollam Estimating Intelligence System), an AI assistant for Wollam Construction, a Utah-based industrial heavy civil contractor.
 
-Your job is to answer questions about historical job cost data from completed projects. You have access to a database containing unit costs, production rates, crew configurations, material costs, subcontractor records, lessons learned, and benchmark rates.
+Your job is to answer questions about historical job cost data from completed projects AND active bid documents. You have access to a database containing unit costs, production rates, crew configurations, material costs, subcontractor records, lessons learned, benchmark rates, and uploaded bid documents (RFPs, specs, addenda).
 
 ## Rules
 
@@ -344,9 +436,19 @@ Your job is to answer questions about historical job cost data from completed pr
 8. If a tool returns empty results, do NOT keep calling more tools hoping to find data. After 1-2 empty searches on a topic, conclude that the data doesn't exist and tell the user.
 9. When asked about $/unit costs (dollars per ton, per SF, per pound, etc.), check BOTH unit_costs AND subcontractors — subcontractor records often have the dollar-per-unit pricing while unit_costs may have labor MH rates.
 
+## Bid Document Rules
+
+10. When the user asks about bid scope, RFP requirements, or spec details, use `search_bid_documents` FIRST.
+11. When the user asks to compare bid scope vs historical data, search bid docs first, THEN search historical data, and combine the results into a cross-referenced answer.
+12. When citing bid document answers, include the document filename and section heading when available.
+13. References to "the RFP", "the specs", "the bid docs", or "the scope" without specifying which bid should default to the FOCUS bid.
+14. If no focus bid is set and the user asks about bid docs, let them know they need to set a focus bid or specify which bid.
+
 ## Available Data
 
 {{AVAILABLE_DATA}}
+
+{{ACTIVE_BIDS}}
 
 ## Response Format
 
@@ -425,10 +527,50 @@ def _build_available_data() -> str:
     return "\n".join(lines)
 
 
+def _build_active_bids() -> str:
+    """Query database for active bids and build the Active Bids section dynamically."""
+    try:
+        bids = query.get_active_bids()
+    except Exception:
+        return ""
+
+    if not bids:
+        return ""
+
+    lines = ["## Active Bids", ""]
+
+    for bid in bids:
+        focus = " **[FOCUS]**" if bid.get("is_focus") else ""
+        name = bid.get("bid_name", "Unnamed")
+        number = bid.get("bid_number", "")
+        header = f"- {name}"
+        if number:
+            header += f" (#{number})"
+        header += focus
+        lines.append(header)
+
+        details = []
+        if bid.get("owner"):
+            details.append(f"Owner: {bid['owner']}")
+        if bid.get("general_contractor"):
+            details.append(f"GC: {bid['general_contractor']}")
+        if bid.get("bid_date"):
+            details.append(f"Bid Date: {bid['bid_date']}")
+        if bid.get("doc_count"):
+            details.append(f"{bid['doc_count']} documents ({bid.get('total_words', 0):,} words)")
+        if details:
+            lines.append(f"  - {', '.join(details)}")
+
+    return "\n".join(lines)
+
+
 def build_system_prompt() -> str:
     """Build the full system prompt with dynamic data section."""
     available = _build_available_data()
-    return SYSTEM_PROMPT_TEMPLATE.replace("{{AVAILABLE_DATA}}", available)
+    active_bids = _build_active_bids()
+    prompt = SYSTEM_PROMPT_TEMPLATE.replace("{{AVAILABLE_DATA}}", available)
+    prompt = prompt.replace("{{ACTIVE_BIDS}}", active_bids)
+    return prompt
 
 # ---------------------------------------------------------------------------
 # Query Engine

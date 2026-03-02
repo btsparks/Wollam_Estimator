@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.2"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -250,6 +250,82 @@ CREATE INDEX IF NOT EXISTS idx_cost_codes_code ON cost_codes(cost_code);
 CREATE INDEX IF NOT EXISTS idx_lessons_category ON lessons_learned(category);
 CREATE INDEX IF NOT EXISTS idx_subcontractors_category ON subcontractors(scope_category);
 CREATE INDEX IF NOT EXISTS idx_material_costs_type ON material_costs(material_type);
+
+-- ============================================================
+-- Active Bid Documents (Phase 2.4)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS active_bids (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_name            TEXT NOT NULL,
+    bid_number          TEXT,
+    owner               TEXT,
+    general_contractor  TEXT,
+    bid_date            DATE,
+    project_type        TEXT,
+    location            TEXT,
+    estimated_value     REAL,
+    status              TEXT DEFAULT 'active',
+    notes               TEXT,
+    is_focus            BOOLEAN DEFAULT FALSE,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bid_documents (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id              INTEGER NOT NULL REFERENCES active_bids(id),
+    filename            TEXT NOT NULL,
+    file_type           TEXT NOT NULL,
+    file_size_bytes     INTEGER,
+    doc_category        TEXT DEFAULT 'general',
+    doc_label           TEXT,
+    extraction_status   TEXT DEFAULT 'pending',
+    extraction_warning  TEXT,
+    page_count          INTEGER,
+    word_count          INTEGER,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bid_document_chunks (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id         INTEGER NOT NULL REFERENCES bid_documents(id),
+    bid_id              INTEGER NOT NULL REFERENCES active_bids(id),
+    chunk_index         INTEGER NOT NULL,
+    chunk_text          TEXT NOT NULL,
+    section_heading     TEXT,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_bid_documents_bid ON bid_documents(bid_id);
+CREATE INDEX IF NOT EXISTS idx_bid_chunks_bid ON bid_document_chunks(bid_id);
+CREATE INDEX IF NOT EXISTS idx_bid_chunks_document ON bid_document_chunks(document_id);
+
+-- ============================================================
+-- Agent Reports (Phase 3)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS agent_reports (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id              INTEGER NOT NULL REFERENCES active_bids(id),
+    agent_name          TEXT NOT NULL,
+    agent_version       TEXT NOT NULL DEFAULT '1.0',
+    status              TEXT NOT NULL DEFAULT 'pending',
+    report_json         TEXT,
+    summary_text        TEXT,
+    risk_rating         TEXT,
+    flags_count         INTEGER DEFAULT 0,
+    input_doc_count     INTEGER DEFAULT 0,
+    input_chunk_count   INTEGER DEFAULT 0,
+    tokens_used         INTEGER DEFAULT 0,
+    duration_seconds    REAL,
+    error_message       TEXT,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_reports_bid_agent
+    ON agent_reports(bid_id, agent_name);
 """
 
 
@@ -263,8 +339,94 @@ def get_connection(db_path: Path = None) -> sqlite3.Connection:
     return conn
 
 
+def _migrate_1_0_to_1_1(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.0 to 1.1: add active bid document tables."""
+    bid_tables_sql = """
+    CREATE TABLE IF NOT EXISTS active_bids (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_name            TEXT NOT NULL,
+        bid_number          TEXT,
+        owner               TEXT,
+        general_contractor  TEXT,
+        bid_date            DATE,
+        project_type        TEXT,
+        location            TEXT,
+        estimated_value     REAL,
+        status              TEXT DEFAULT 'active',
+        notes               TEXT,
+        is_focus            BOOLEAN DEFAULT FALSE,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS bid_documents (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id              INTEGER NOT NULL REFERENCES active_bids(id),
+        filename            TEXT NOT NULL,
+        file_type           TEXT NOT NULL,
+        file_size_bytes     INTEGER,
+        doc_category        TEXT DEFAULT 'general',
+        doc_label           TEXT,
+        extraction_status   TEXT DEFAULT 'pending',
+        extraction_warning  TEXT,
+        page_count          INTEGER,
+        word_count          INTEGER,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS bid_document_chunks (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id         INTEGER NOT NULL REFERENCES bid_documents(id),
+        bid_id              INTEGER NOT NULL REFERENCES active_bids(id),
+        chunk_index         INTEGER NOT NULL,
+        chunk_text          TEXT NOT NULL,
+        section_heading     TEXT,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bid_documents_bid ON bid_documents(bid_id);
+    CREATE INDEX IF NOT EXISTS idx_bid_chunks_bid ON bid_document_chunks(bid_id);
+    CREATE INDEX IF NOT EXISTS idx_bid_chunks_document ON bid_document_chunks(document_id);
+    """
+    conn.executescript(bid_tables_sql)
+    conn.execute("UPDATE schema_version SET version = '1.1'")
+
+
+def _migrate_1_1_to_1_2(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.1 to 1.2: add agent_reports table."""
+    agent_reports_sql = """
+    CREATE TABLE IF NOT EXISTS agent_reports (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id              INTEGER NOT NULL REFERENCES active_bids(id),
+        agent_name          TEXT NOT NULL,
+        agent_version       TEXT NOT NULL DEFAULT '1.0',
+        status              TEXT NOT NULL DEFAULT 'pending',
+        report_json         TEXT,
+        summary_text        TEXT,
+        risk_rating         TEXT,
+        flags_count         INTEGER DEFAULT 0,
+        input_doc_count     INTEGER DEFAULT 0,
+        input_chunk_count   INTEGER DEFAULT 0,
+        tokens_used         INTEGER DEFAULT 0,
+        duration_seconds    REAL,
+        error_message       TEXT,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_reports_bid_agent
+        ON agent_reports(bid_id, agent_name);
+    """
+    conn.executescript(agent_reports_sql)
+    conn.execute("UPDATE schema_version SET version = '1.2'")
+
+
 def init_db(db_path: Path = None) -> None:
-    """Create all tables and indexes from the schema."""
+    """Create all tables and indexes from the schema.
+
+    If the database already exists at an older schema version, runs
+    the appropriate migration(s) to bring it up to date.
+    """
     conn = get_connection(db_path)
     try:
         conn.executescript(SCHEMA_SQL)
@@ -275,6 +437,13 @@ def init_db(db_path: Path = None) -> None:
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (SCHEMA_VERSION,),
             )
+        else:
+            current = existing["version"]
+            if current == "1.0":
+                _migrate_1_0_to_1_1(conn)
+                current = "1.1"
+            if current == "1.1":
+                _migrate_1_1_to_1_2(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:
