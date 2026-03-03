@@ -8,6 +8,27 @@ Mock HCSS API response data in tests/mock_data/ mirrors what the real
 API would return for Jobs 8553 and 8576. These tests prove that the
 automated pipeline produces the same rates as hours of manual cataloging.
 
+IMPORTANT DESIGN NOTE (per Travis, 2026-03-03):
+    JCDs are NOT equivalent to raw HeavyJob/HeavyBid API output. A JCD is a
+    curated intelligence product that synthesizes API data with PM interviews,
+    crew observations, production context, and estimating judgment. The rates
+    in a JCD (e.g., "recommended 0.28 MH/SF for wall F/S") reflect human
+    analysis that goes beyond what any automated pipeline can replicate from
+    raw API data alone.
+
+    These Phase B tests validate that the pipeline MATH works correctly —
+    given mock cost code data shaped like JCD values, the calculated rates
+    land within tolerance. But when the real HCSS API is connected (Phase C+),
+    the raw data may differ from JCD rates because:
+      - JCDs include context the API doesn't (lessons learned, crew details)
+      - JCDs apply PM judgment to normalize anomalies
+      - Cost code meanings vary between projects (see discipline_map.yaml TODO)
+      - "Recommended" rates in JCDs blend budget, actual, and experience
+
+    Future validation should compare pipeline output to raw HeavyJob/HeavyBid
+    data directly, not to JCD rates. JCDs remain the gold standard for the
+    knowledge base but represent a higher-level product than API output.
+
 Validation targets (from WEIS_CLAUDE_CODE_PROMPT_3-3.md):
 
 | Activity                 | Job  | Expected Rate | Tolerance |

@@ -4,6 +4,19 @@
 # Wollam uses 4-digit cost codes in HCSS HeavyJob. The first 2 digits
 # generally indicate the discipline, but there are exceptions that
 # require specific overrides. This config handles all known patterns.
+#
+# TODO (future phase): Clean up subcategory conflicts. Cost code numbers
+# can mean different things on different projects. For example:
+#   - Code 2340: "CW_F/S Walls" (concrete) on Job 8553, but mapped to
+#     mechanical_piping subcategory "ss_header" here
+#   - Code 2300: "C_Site Equipment" (concrete support) on Job 8553, but
+#     mapped to mechanical_piping subcategory "site_equipment" here
+#   - Code 2330: "CO_F/S Octagon" (concrete) on Job 8553, but mapped to
+#     mechanical_piping subcategory "pumps" here
+# This needs a per-project override system or smarter mapping that reads
+# cost code descriptions from HeavyJob rather than relying solely on
+# code number patterns. Until then, aggregation tests use explicit code
+# sets rather than this mapper for discipline-level totals.
 
 disciplines:
   general_conditions:
