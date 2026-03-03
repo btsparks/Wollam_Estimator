@@ -24,7 +24,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Default HCSS identity endpoint
-DEFAULT_TOKEN_URL = "https://api.hcss.com/identity/connect/token"
+DEFAULT_TOKEN_URL = "https://api.hcssapps.com/identity/connect/token"
 
 # Refresh token 5 minutes (300 seconds) before it expires
 TOKEN_REFRESH_BUFFER_SECONDS = 300
@@ -124,6 +124,7 @@ class HCSSAuth:
                     "grant_type": "client_credentials",
                     "client_id": self._client_id,
                     "client_secret": self._client_secret,
+                    "scope": "heavyjob heavybid-estimate-insights",
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=30.0,

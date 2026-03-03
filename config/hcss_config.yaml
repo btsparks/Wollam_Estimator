@@ -1,7 +1,7 @@
 hcss:
-  identity_url: "https://api.hcss.com/identity"
-  heavyjob_url: "https://api.hcss.com/heavyjob"
-  heavybid_url: "https://api.hcss.com/heavybid"
+  identity_url: "https://api.hcssapps.com/identity"
+  heavyjob_url: "https://api.hcssapps.com/heavyjob"
+  heavybid_url: "https://api.hcssapps.com/heavybid-estimate-insights"
   # Credentials loaded from environment variables:
   # HCSS_CLIENT_ID
   # HCSS_CLIENT_SECRET
