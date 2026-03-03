@@ -17,6 +17,30 @@ class QualityAgent(BidAgent):
         funcs["search_lessons_learned"] = EXTENDED_TOOL_FUNCTIONS["search_lessons_learned"]
         return funcs
 
+    def check_document_relevance(self, bid_context: dict) -> dict | None:
+        """Exit early if no specification-type documents are uploaded."""
+        docs = bid_context.get("documents", [])
+        if not docs:
+            return {
+                "executive_summary": "No documents uploaded for this bid. Cannot perform quality analysis.",
+                "flags_count": 0,
+                "findings": [],
+                "cost_impacting_items": [],
+                "submittal_schedule": [],
+            }
+
+        total_words = sum(d.get("word_count", 0) or 0 for d in docs)
+        if total_words < 200:
+            return {
+                "executive_summary": f"Uploaded documents contain only {total_words:,} words — insufficient for meaningful quality analysis. Upload technical specifications.",
+                "flags_count": 0,
+                "findings": [],
+                "cost_impacting_items": [],
+                "submittal_schedule": [],
+            }
+
+        return None
+
     def get_system_prompt(self, bid_context: dict) -> str:
         doc_list = "\n".join(
             f"  - [{d.get('doc_category', 'general')}] {d['filename']} (ID: {d['id']})"

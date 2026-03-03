@@ -14,14 +14,30 @@ AI-powered estimating intelligence system for Wollam Construction (Utah-based in
 ```
 app/               # Application code
   config.py        # Environment config (paths, API keys)
-  database.py      # SQLite schema + connection management
+  database.py      # SQLite schema v1.3 + connection management + migrations
+  ai_engine.py     # QueryEngine (historical chat) + BidChatEngine (bid doc chat)
+  query.py         # All database query functions
+  doc_processing.py # Document extraction + text chunking
+  agents/          # Phase 3 bid intelligence agents
+    base.py        # BidAgent abstract base class with early-exit + tool-use loop
+    document_control.py  # Document register, completeness, change log
+    legal.py       # Contract risk analysis
+    quality.py     # Quality requirements vs Wollam standard
+    safety.py      # Safety requirements vs Wollam baseline
+    subcontract.py # Sub-eligible scope identification
+    chief_estimator.py   # Synthesizes all agent reports into decision brief
+    runner.py      # Agent orchestration
+  pages/           # Streamlit multi-page app
+    1_Data_Catalog.py    # Browse historical data
+    2_Upload_JCD.py      # Upload Job Cost Data
+    3_Active_Bids.py     # Manage bids, upload docs (with replacement)
+    4_Bid_Review.py      # Run agents, view reports, staleness detection, cost dashboard
+    5_Bid_Chat.py        # Agent-aware Q&A chat per bid
 data/
   jcd/             # Job Cost Data markdown files (source of truth)
   db/              # SQLite database (gitignored, generated)
 scripts/           # CLI scripts (seed_db.py, etc.)
 tests/             # pytest tests
-  fixtures/        # Test data
-JCDs/              # DEPRECATED - use data/jcd/ instead
 ```
 
 ## Key Architecture Decisions
@@ -56,9 +72,21 @@ pip install -r requirements.txt
 5. All query responses include source citations
 
 ## Current Phase
-**Phase 2a: Conversation Layer — CLI** ✅ Complete
-- 12-tool Claude API integration, Rich CLI, 52 tests passing
-- Next: Phase 2b (Streamlit web UI) or Phase 2.4 (active bid document layer)
+**Phase 3: Strategic Assessment & Recommendations** ✅ Complete
+- 6 agents: Document Control, Legal, Quality, Safety, Subcontract, Chief Estimator Brief
+- Bid Doc Chat page with agent-aware Q&A and per-bid conversation persistence
+- Staleness detection: warns when reports are outdated after new document uploads
+- Agent early-exit logic: skips expensive API calls when no relevant documents exist
+- Document replacement: SHA-256 hashing, same-filename re-upload replaces old version
+- Per-bid cost dashboard: aggregate tokens, cost, and duration across agent runs
+- Document Control change log: tracks document adds/removes/changes between runs
+- Agent report diffing: tracks which documents were analyzed, enables change comparison
+- Schema v1.3 with bid_chat_messages table, file_hash/version/supersedes_id on bid_documents
+
+### Previous Phases
+- **Phase 2b: Streamlit Web UI** ✅ — Multi-page app with Data Catalog, Upload JCD, Active Bids, Bid Review
+- **Phase 2.4: Active Bid Documents** ✅ — Document upload, text extraction, chunking, keyword search
+- **Phase 2a: Conversation Layer — CLI** ✅ — 12-tool Claude API integration, Rich CLI
 
 ## JCD Data Available
 - Job 8553 (RTK SPD Pump Station): 9 discipline sections + master summary in `data/jcd/`

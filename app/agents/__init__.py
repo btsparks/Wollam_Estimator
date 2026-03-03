@@ -8,14 +8,16 @@ from app.agents.legal import LegalAgent
 from app.agents.quality import QualityAgent
 from app.agents.safety import SafetyAgent
 from app.agents.subcontract import SubcontractAgent
+from app.agents.chief_estimator import ChiefEstimatorAgent
 
-# Ordered: Document Control first, then parallel reviewers
+# Ordered: Document Control first, then parallel reviewers, then Chief Estimator last
 AGENT_REGISTRY: dict[str, type] = {
     "document_control": DocumentControlAgent,
     "legal": LegalAgent,
     "quality": QualityAgent,
     "safety": SafetyAgent,
     "subcontract": SubcontractAgent,
+    "chief_estimator": ChiefEstimatorAgent,
 }
 
 __all__ = [
@@ -25,4 +27,5 @@ __all__ = [
     "QualityAgent",
     "SafetyAgent",
     "SubcontractAgent",
+    "ChiefEstimatorAgent",
 ]

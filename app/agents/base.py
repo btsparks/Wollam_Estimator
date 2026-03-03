@@ -212,6 +212,19 @@ class BidAgent(ABC):
         """Return tool name → function mapping. Override to add more."""
         return dict(DEFAULT_TOOL_FUNCTIONS)
 
+    def check_document_relevance(self, bid_context: dict) -> dict | None:
+        """Check if the bid has relevant documents for this agent.
+
+        Override in subclasses to implement agent-specific relevance checks.
+        Examines the document list (categories, filenames, word counts) to decide
+        if the full analysis is worth running.
+
+        Returns:
+            None if documents are sufficient and agent should proceed normally.
+            A report dict if agent should exit early (e.g., "no relevant docs found").
+        """
+        return None
+
     def _build_bid_context(self, bid_id: int) -> dict:
         """Gather bid metadata and document list for prompt injection."""
         overview = query.get_bid_overview(bid_id)
@@ -276,6 +289,32 @@ class BidAgent(ABC):
 
         try:
             bid_context = self._build_bid_context(bid_id)
+
+            # Early-exit check: skip expensive API calls if no relevant docs
+            early_report = self.check_document_relevance(bid_context)
+            if early_report is not None:
+                duration = time.time() - start_time
+                summary = early_report.get("executive_summary", "")[:500]
+                flags = early_report.get("flags_count", 0)
+                risk = early_report.get("risk_rating")
+                query.upsert_agent_report(
+                    bid_id, self.AGENT_NAME,
+                    agent_version=self.AGENT_VERSION,
+                    status="complete",
+                    report_json=json.dumps(early_report),
+                    summary_text=summary,
+                    risk_rating=risk,
+                    flags_count=flags,
+                    input_doc_count=bid_context["total_documents"],
+                    input_chunk_count=bid_context["total_chunks"],
+                    tokens_used=0,
+                    duration_seconds=round(duration, 1),
+                    error_message=None,
+                )
+                if progress_callback:
+                    progress_callback(f"{self.AGENT_DISPLAY_NAME}: Early exit — insufficient documents.")
+                return early_report
+
             system_prompt = self.get_system_prompt(bid_context)
             task_prompt = self.get_task_prompt(bid_context)
             tools = self.get_tools()
@@ -363,6 +402,10 @@ class BidAgent(ABC):
             flags = report.get("flags_count", 0)
             risk = report.get("risk_rating")
 
+            # Track which documents were analyzed
+            doc_ids = [d["id"] for d in bid_context.get("documents", [])]
+            documents_analyzed = json.dumps(doc_ids)
+
             query.upsert_agent_report(
                 bid_id, self.AGENT_NAME,
                 agent_version=self.AGENT_VERSION,
@@ -376,6 +419,7 @@ class BidAgent(ABC):
                 tokens_used=total_tokens,
                 duration_seconds=round(duration, 1),
                 error_message=None,
+                documents_analyzed=documents_analyzed,
             )
 
             if progress_callback:

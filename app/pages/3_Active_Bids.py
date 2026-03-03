@@ -1,6 +1,7 @@
 """WEIS Active Bids — Create bids, upload documents, manage focus bid."""
 
 import sys
+import hashlib
 from pathlib import Path
 
 # Ensure project root on sys.path for Streamlit page discovery
@@ -245,6 +246,9 @@ for bid in bids:
             ):
                 progress = st.progress(0, text="Processing documents...")
 
+                replaced_count = 0
+                new_count = 0
+
                 for i, f in enumerate(uploaded_files):
                     progress.progress(
                         i / len(uploaded_files),
@@ -253,23 +257,66 @@ for bid in bids:
 
                     file_bytes = f.read()
                     ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else "txt"
+                    file_hash = hashlib.sha256(file_bytes).hexdigest()
+
+                    # Check for existing document with same filename
+                    existing = query.find_document_by_filename(bid_id, f.name)
 
                     # Extract text
                     result = extract_document(file_bytes, f.name)
 
-                    # Insert document record
-                    doc_id = query.insert_bid_document(
-                        bid_id=bid_id,
-                        filename=f.name,
-                        file_type=ext,
-                        file_size_bytes=len(file_bytes),
-                        doc_category=doc_category,
-                        doc_label=doc_label or None,
-                        extraction_status=result["status"],
-                        extraction_warning=result.get("warning"),
-                        page_count=result.get("page_count"),
-                        word_count=result["word_count"],
-                    )
+                    if existing and existing.get("file_hash") == file_hash:
+                        # Identical file — skip
+                        progress.progress(
+                            (i + 1) / len(uploaded_files),
+                            text=f"Skipped {f.name} (identical)",
+                        )
+                        continue
+
+                    if existing:
+                        # Same filename, different content — replace
+                        old_version = existing.get("version", 1) or 1
+                        doc_id = query.replace_bid_document(
+                            old_doc_id=existing["id"],
+                            bid_id=bid_id,
+                            filename=f.name,
+                            file_type=ext,
+                            file_size_bytes=len(file_bytes),
+                            file_hash=file_hash,
+                            doc_category=doc_category,
+                            doc_label=doc_label or None,
+                            extraction_status=result["status"],
+                            extraction_warning=result.get("warning"),
+                            page_count=result.get("page_count"),
+                            word_count=result["word_count"],
+                            old_version=old_version,
+                        )
+                        replaced_count += 1
+                    else:
+                        # New document
+                        doc_id = query.insert_bid_document(
+                            bid_id=bid_id,
+                            filename=f.name,
+                            file_type=ext,
+                            file_size_bytes=len(file_bytes),
+                            doc_category=doc_category,
+                            doc_label=doc_label or None,
+                            extraction_status=result["status"],
+                            extraction_warning=result.get("warning"),
+                            page_count=result.get("page_count"),
+                            word_count=result["word_count"],
+                        )
+                        # Store hash on new documents too
+                        conn = get_connection()
+                        try:
+                            conn.execute(
+                                "UPDATE bid_documents SET file_hash = ? WHERE id = ?",
+                                (file_hash, doc_id),
+                            )
+                            conn.commit()
+                        finally:
+                            conn.close()
+                        new_count += 1
 
                     # Chunk and insert text if extraction succeeded
                     if result["status"] in ("success", "partial") and result["text"].strip():
@@ -278,7 +325,12 @@ for bid in bids:
                             query.insert_bid_chunks(doc_id, bid_id, chunks)
 
                 progress.progress(1.0, text="Done!")
-                st.success(f"Processed {len(uploaded_files)} file(s).")
+                parts = []
+                if new_count:
+                    parts.append(f"{new_count} new")
+                if replaced_count:
+                    parts.append(f"{replaced_count} updated")
+                st.success(f"Processed {len(uploaded_files)} file(s) ({', '.join(parts) if parts else 'all skipped — identical'}).")
                 st.session_state[f"upload_counter_{bid_id}"] = upload_counter + 1
                 st.cache_resource.clear()
                 st.rerun()

@@ -598,6 +598,15 @@ def delete_bid_cascade(bid_id: int) -> dict:
     try:
         deleted = {}
 
+        # Delete chat messages (may not exist on older schemas)
+        try:
+            cursor = conn.execute(
+                "DELETE FROM bid_chat_messages WHERE bid_id = ?", (bid_id,)
+            )
+            deleted["chat_messages"] = cursor.rowcount
+        except Exception:
+            deleted["chat_messages"] = 0
+
         # Delete agent reports (may not exist on older schemas)
         try:
             cursor = conn.execute(
@@ -1037,5 +1046,256 @@ def delete_agent_reports(bid_id: int) -> int:
         )
         conn.commit()
         return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def get_agent_report_summaries(bid_id: int) -> list[dict]:
+    """Get lightweight summaries of all completed agent reports for a bid.
+
+    Used by chat to reference agent findings without re-analyzing docs.
+    Returns agent_name, summary_text, risk_rating, flags_count, and
+    a truncated executive_summary from report_json.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT agent_name, summary_text, risk_rating, flags_count,
+                      report_json, tokens_used, duration_seconds, updated_at
+               FROM agent_reports
+               WHERE bid_id = ? AND status = 'complete'
+               ORDER BY agent_name""",
+            (bid_id,),
+        ).fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            # Parse report_json to extract key findings
+            if d.get("report_json"):
+                import json
+                try:
+                    report = json.loads(d["report_json"])
+                    d["executive_summary"] = report.get("executive_summary", "")
+                    d["findings_count"] = len(report.get("findings", []))
+                    # For subcontract, count packages
+                    if "identified_packages" in report:
+                        d["packages_count"] = len(report["identified_packages"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            del d["report_json"]  # Don't send full JSON to chat
+            results.append(d)
+        return results
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Bid Chat Messages (Phase 3 — Priority 1)
+# ---------------------------------------------------------------------------
+
+
+def get_chat_messages(bid_id: int, limit: int = 50) -> list[dict]:
+    """Get chat messages for a bid, oldest first."""
+    conn = get_connection()
+    try:
+        return _rows_to_dicts(conn.execute(
+            """SELECT id, role, content, created_at
+               FROM bid_chat_messages
+               WHERE bid_id = ?
+               ORDER BY id ASC
+               LIMIT ?""",
+            (bid_id, limit),
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+def insert_chat_message(bid_id: int, role: str, content: str) -> int:
+    """Insert a chat message. Returns the new message ID."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO bid_chat_messages (bid_id, role, content) VALUES (?, ?, ?)",
+            (bid_id, role, content),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def clear_chat_messages(bid_id: int) -> int:
+    """Delete all chat messages for a bid. Returns count deleted."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM bid_chat_messages WHERE bid_id = ?", (bid_id,)
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Staleness Detection (Phase 3 — Priority 2)
+# ---------------------------------------------------------------------------
+
+
+def get_bid_staleness(bid_id: int) -> dict:
+    """Check if agent reports are stale relative to uploaded documents.
+
+    Returns:
+        dict with newest_doc_time, oldest_report_time, is_stale, and per-agent status.
+    """
+    conn = get_connection()
+    try:
+        newest_doc = conn.execute(
+            "SELECT MAX(created_at) as t FROM bid_documents WHERE bid_id = ?",
+            (bid_id,),
+        ).fetchone()
+
+        reports = conn.execute(
+            """SELECT agent_name, updated_at, status
+               FROM agent_reports WHERE bid_id = ?""",
+            (bid_id,),
+        ).fetchall()
+
+        newest_doc_time = newest_doc["t"] if newest_doc else None
+        agent_status = {}
+        is_stale = False
+
+        for r in reports:
+            stale = False
+            if newest_doc_time and r["updated_at"] and r["status"] == "complete":
+                stale = r["updated_at"] < newest_doc_time
+                if stale:
+                    is_stale = True
+            agent_status[r["agent_name"]] = {
+                "updated_at": r["updated_at"],
+                "status": r["status"],
+                "is_stale": stale,
+            }
+
+        return {
+            "newest_doc_time": newest_doc_time,
+            "is_stale": is_stale,
+            "agents": agent_status,
+        }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Document Replacement (Phase 3 — Priority 4)
+# ---------------------------------------------------------------------------
+
+
+def get_report_diff(bid_id: int, agent_name: str, new_report: dict) -> dict | None:
+    """Compare a new report against the existing one and produce a diff summary.
+
+    Returns None if no previous report exists. Otherwise returns a dict with:
+    - previous_flags, new_flags
+    - previous_risk, new_risk
+    - findings_added, findings_removed (count)
+    - summary: human-readable change description
+    """
+    existing = get_agent_report(bid_id, agent_name)
+    if not existing or not existing.get("report_json"):
+        return None
+
+    import json
+    try:
+        old_report = json.loads(existing["report_json"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    old_flags = old_report.get("flags_count", 0) or 0
+    new_flags = new_report.get("flags_count", 0) or 0
+    old_risk = old_report.get("risk_rating")
+    new_risk = new_report.get("risk_rating")
+
+    # Count findings
+    old_findings = len(old_report.get("findings", []))
+    new_findings = len(new_report.get("findings", []))
+
+    # Count packages (for subcontract)
+    old_packages = len(old_report.get("identified_packages", []))
+    new_packages = len(new_report.get("identified_packages", []))
+
+    # Build summary
+    changes = []
+    if new_flags != old_flags:
+        changes.append(f"Flags: {old_flags} → {new_flags}")
+    if new_risk != old_risk:
+        changes.append(f"Risk: {old_risk or 'N/A'} → {new_risk or 'N/A'}")
+    if new_findings != old_findings:
+        changes.append(f"Findings: {old_findings} → {new_findings}")
+    if new_packages != old_packages:
+        changes.append(f"Packages: {old_packages} → {new_packages}")
+
+    return {
+        "previous_flags": old_flags,
+        "new_flags": new_flags,
+        "previous_risk": old_risk,
+        "new_risk": new_risk,
+        "findings_added": max(0, new_findings - old_findings),
+        "findings_removed": max(0, old_findings - new_findings),
+        "packages_added": max(0, new_packages - old_packages),
+        "packages_removed": max(0, old_packages - new_packages),
+        "summary": " | ".join(changes) if changes else "No significant changes",
+    }
+
+
+def find_document_by_filename(bid_id: int, filename: str) -> dict | None:
+    """Find an existing document by filename within a bid."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM bid_documents WHERE bid_id = ? AND filename = ?",
+            (bid_id, filename),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def replace_bid_document(old_doc_id: int, bid_id: int, filename: str,
+                         file_type: str, file_size_bytes: int,
+                         file_hash: str, doc_category: str,
+                         doc_label: str, extraction_status: str,
+                         extraction_warning: str, page_count: int,
+                         word_count: int, old_version: int) -> int:
+    """Replace a document: archive old chunks, insert new doc record.
+
+    Returns the new document ID.
+    """
+    conn = get_connection()
+    try:
+        # Delete old chunks
+        conn.execute(
+            "DELETE FROM bid_document_chunks WHERE document_id = ?", (old_doc_id,)
+        )
+        # Delete old document record
+        conn.execute(
+            "DELETE FROM bid_documents WHERE id = ?", (old_doc_id,)
+        )
+
+        # Insert new version
+        cursor = conn.execute(
+            """INSERT INTO bid_documents
+               (bid_id, filename, file_type, file_size_bytes, doc_category,
+                doc_label, extraction_status, extraction_warning, page_count,
+                word_count, file_hash, version, supersedes_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (bid_id, filename, file_type, file_size_bytes, doc_category,
+             doc_label, extraction_status, extraction_warning, page_count,
+             word_count, file_hash, old_version + 1, old_doc_id),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

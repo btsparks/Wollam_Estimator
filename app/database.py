@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -326,6 +326,20 @@ CREATE TABLE IF NOT EXISTS agent_reports (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_reports_bid_agent
     ON agent_reports(bid_id, agent_name);
+
+-- ============================================================
+-- Bid Chat Messages (Phase 3 — Priority 1)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS bid_chat_messages (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id              INTEGER NOT NULL REFERENCES active_bids(id),
+    role                TEXT NOT NULL,
+    content             TEXT NOT NULL,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_bid_chat_bid ON bid_chat_messages(bid_id);
 """
 
 
@@ -421,6 +435,36 @@ def _migrate_1_1_to_1_2(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '1.2'")
 
 
+def _migrate_1_2_to_1_3(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.2 to 1.3: add bid chat, document hashing, report diffing."""
+    migration_sql = """
+    CREATE TABLE IF NOT EXISTS bid_chat_messages (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id              INTEGER NOT NULL REFERENCES active_bids(id),
+        role                TEXT NOT NULL,
+        content             TEXT NOT NULL,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bid_chat_bid ON bid_chat_messages(bid_id);
+    """
+    conn.executescript(migration_sql)
+
+    # Add new columns to existing tables (SQLite ADD COLUMN is safe if already exists)
+    for col_sql in [
+        "ALTER TABLE bid_documents ADD COLUMN file_hash TEXT",
+        "ALTER TABLE bid_documents ADD COLUMN version INTEGER DEFAULT 1",
+        "ALTER TABLE bid_documents ADD COLUMN supersedes_id INTEGER",
+        "ALTER TABLE agent_reports ADD COLUMN documents_analyzed TEXT",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    conn.execute("UPDATE schema_version SET version = '1.3'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -444,6 +488,9 @@ def init_db(db_path: Path = None) -> None:
                 current = "1.1"
             if current == "1.1":
                 _migrate_1_1_to_1_2(conn)
+                current = "1.2"
+            if current == "1.2":
+                _migrate_1_2_to_1_3(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

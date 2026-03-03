@@ -643,3 +643,153 @@ class QueryEngine:
     def get_status(self) -> dict:
         """Get database status without using AI."""
         return query.get_database_overview()
+
+
+# ---------------------------------------------------------------------------
+# Bid Chat Engine (Phase 3 — Priority 1)
+# ---------------------------------------------------------------------------
+
+BID_CHAT_TOOLS = TOOLS + [
+    {
+        "name": "get_agent_report_summary",
+        "description": (
+            "Get summaries of completed agent analysis reports for the current bid. "
+            "Returns findings from Document Control, Legal, Quality, Safety, and Subcontract agents. "
+            "Use this when the user asks about agent findings, risk ratings, or wants to reference "
+            "what the agents already found — avoids re-analyzing the documents."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bid_id": {
+                    "type": "integer",
+                    "description": "Bid ID. If omitted, uses the focus bid.",
+                },
+            },
+            "required": [],
+        },
+    },
+]
+
+BID_CHAT_TOOL_FUNCTIONS = dict(TOOL_FUNCTIONS)
+BID_CHAT_TOOL_FUNCTIONS["get_agent_report_summary"] = query.get_agent_report_summaries
+
+
+def _execute_bid_chat_tool(name: str, input_args: dict) -> str:
+    """Execute a bid chat tool and return JSON string result."""
+    func = BID_CHAT_TOOL_FUNCTIONS.get(name)
+    if not func:
+        return json.dumps({"error": f"Unknown tool: {name}"})
+    try:
+        result = func(**input_args)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+BID_CHAT_SYSTEM_TEMPLATE = """You are WEIS Bid Chat — a focused Q&A assistant for Wollam Construction's active bid documents.
+
+You answer specific questions about the current bid's documents. You have access to:
+1. **Bid document search** — search and read the uploaded bid documents (specs, RFPs, addenda)
+2. **Agent report summaries** — reference what the Document Control, Legal, Quality, Safety, and Subcontract agents have already found
+3. **Historical project data** — cross-reference with Wollam's historical job cost data
+
+## Rules
+1. Search bid documents FIRST when asked about scope, specs, or requirements.
+2. Use `get_agent_report_summary` when asked about agent findings, risk ratings, or "what did the agents find?"
+3. When the user asks to "drill deeper" into an agent finding, search the bid docs for the specific language.
+4. Always cite source documents (filename, section) when quoting bid docs.
+5. Keep answers concise and actionable — this is for estimators making decisions.
+6. If you can't find something, say so clearly rather than guessing.
+7. When comparing bid scope to historical data, search bid docs first, then historical tools.
+
+## Current Bid
+{{BID_CONTEXT}}
+
+## Available Historical Data
+{{AVAILABLE_DATA}}
+"""
+
+
+class BidChatEngine:
+    """Chat engine scoped to a specific bid's documents and agent reports."""
+
+    def __init__(self, bid_id: int):
+        if not ANTHROPIC_API_KEY:
+            raise ValueError("ANTHROPIC_API_KEY not set.")
+        self.client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        self.bid_id = bid_id
+        self.conversation: list[dict] = []
+
+    def _build_system_prompt(self) -> str:
+        """Build system prompt with bid context injected."""
+        overview = query.get_bid_overview(self.bid_id)
+        bid_context_parts = [
+            f"- **Bid Name:** {overview.get('bid_name', 'Unknown')}",
+            f"- **Bid Number:** {overview.get('bid_number', 'N/A')}",
+            f"- **Owner:** {overview.get('owner', 'N/A')}",
+            f"- **GC:** {overview.get('general_contractor', 'N/A')}",
+            f"- **Bid Date:** {overview.get('bid_date', 'N/A')}",
+            f"- **Documents:** {overview.get('total_documents', 0)} ({overview.get('total_words', 0):,} words)",
+        ]
+
+        # List agent report status
+        reports = query.get_agent_report_summaries(self.bid_id)
+        if reports:
+            bid_context_parts.append("\n### Agent Reports Available")
+            for r in reports:
+                name = r["agent_name"].replace("_", " ").title()
+                rating = f" [{r['risk_rating']}]" if r.get("risk_rating") else ""
+                flags = f" ({r['flags_count']} flags)" if r.get("flags_count") else ""
+                bid_context_parts.append(f"- **{name}**{rating}{flags}: {r.get('summary_text', 'Complete')[:100]}")
+
+        bid_context = "\n".join(bid_context_parts)
+        available_data = _build_available_data()
+
+        prompt = BID_CHAT_SYSTEM_TEMPLATE.replace("{{BID_CONTEXT}}", bid_context)
+        prompt = prompt.replace("{{AVAILABLE_DATA}}", available_data)
+        return prompt
+
+    def load_history(self, messages: list[dict]) -> None:
+        """Load previous conversation messages."""
+        self.conversation = [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+        ]
+
+    def ask(self, question: str) -> str:
+        """Ask a question scoped to the bid. Returns the answer text."""
+        self.conversation.append({"role": "user", "content": question})
+        system_prompt = self._build_system_prompt()
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            response = self.client.messages.create(
+                model=MODEL,
+                max_tokens=2048,
+                system=system_prompt,
+                tools=BID_CHAT_TOOLS,
+                messages=self.conversation,
+            )
+
+            self.conversation.append({"role": "assistant", "content": response.content})
+
+            tool_uses = [b for b in response.content if b.type == "tool_use"]
+            if not tool_uses:
+                text_parts = [b.text for b in response.content if hasattr(b, "text")]
+                return "\n".join(text_parts) if text_parts else "(No response)"
+
+            tool_results = []
+            for tool_block in tool_uses:
+                result = _execute_bid_chat_tool(tool_block.name, tool_block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_block.id,
+                    "content": result,
+                })
+            self.conversation.append({"role": "user", "content": tool_results})
+
+        return "(Query required too many steps. Please try a more specific question.)"
+
+    def reset(self):
+        """Clear conversation history."""
+        self.conversation = []

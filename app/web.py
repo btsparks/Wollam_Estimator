@@ -4,6 +4,13 @@ Browser-based chat UI that reuses the existing QueryEngine and query functions.
 Run with: streamlit run app/web.py
 """
 
+import sys
+from pathlib import Path
+
+# Ensure the project root is on sys.path so "from app.x" imports work
+# when Streamlit runs this file directly.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import streamlit as st
 from app.ai_engine import QueryEngine
 from app import query
@@ -80,6 +87,64 @@ with st.sidebar:
 
     st.divider()
 
+    # --- Active Bids / Focus Bid ---
+    try:
+        active_bids = query.get_active_bids()
+        if active_bids:
+            st.markdown("### Active Bids")
+
+            # Build options for the dropdown
+            bid_options = {0: "None (no focus bid)"}
+            for b in active_bids:
+                label = b["bid_name"]
+                if b.get("bid_number"):
+                    label += f" (#{b['bid_number']})"
+                bid_options[b["id"]] = label
+
+            # Find current focus
+            focus_bid = query.get_focus_bid()
+            current_focus_id = focus_bid["id"] if focus_bid else 0
+            bid_ids = list(bid_options.keys())
+            current_index = bid_ids.index(current_focus_id) if current_focus_id in bid_ids else 0
+
+            selected_bid_id = st.selectbox(
+                "Focus Bid",
+                bid_ids,
+                index=current_index,
+                format_func=lambda x: bid_options[x],
+                key="focus_bid_selector",
+            )
+
+            # Update focus if changed
+            if selected_bid_id != current_focus_id:
+                if selected_bid_id == 0:
+                    query.clear_focus_bid()
+                else:
+                    query.set_focus_bid(selected_bid_id)
+                st.cache_resource.clear()
+                st.rerun()
+
+            # Show focus bid info
+            if focus_bid:
+                info_parts = []
+                if focus_bid.get("owner"):
+                    info_parts.append(f"Owner: {focus_bid['owner']}")
+                if focus_bid.get("general_contractor"):
+                    info_parts.append(f"GC: {focus_bid['general_contractor']}")
+                if focus_bid.get("bid_date"):
+                    info_parts.append(f"Bid: {focus_bid['bid_date']}")
+                if info_parts:
+                    st.caption(" · ".join(info_parts))
+
+                # Doc count for focus bid
+                bid_docs = query.get_bid_documents(focus_bid["id"])
+                if bid_docs:
+                    st.caption(f"{len(bid_docs)} document(s) uploaded")
+
+            st.divider()
+    except Exception:
+        pass
+
     # --- Projects ---
     if overview and overview["projects"]:
         with st.expander("Projects", expanded=False):
@@ -118,6 +183,27 @@ with st.sidebar:
 
     # --- Example Questions ---
     st.markdown("### Try These")
+
+    # Bid-specific examples when a focus bid is set
+    try:
+        _focus = query.get_focus_bid()
+    except Exception:
+        _focus = None
+
+    if _focus:
+        bid_examples = [
+            "What does the RFP say about concrete?",
+            "What are the spec requirements for pipe supports?",
+            "Summarize the bid scope",
+            "Compare the RFP concrete scope to what we did on 8553",
+        ]
+        st.caption(f"**Bid: {_focus['bid_name']}**")
+        for ex in bid_examples:
+            if st.button(ex, key=f"bex_{ex[:20]}", use_container_width=True):
+                st.session_state.pending_question = ex
+        st.markdown("---")
+        st.caption("**Historical:**")
+
     examples = [
         "What did we pay for 20-inch flanged joints?",
         "What was our concrete cost per CY?",
@@ -165,8 +251,18 @@ for msg in st.session_state.messages:
 # Handle pending question from sidebar example buttons
 pending = st.session_state.pop("pending_question", None)
 
-# Chat input
-user_input = st.chat_input("Ask a question about historical job cost data...", disabled=not engine_ok)
+# Chat input — context-aware placeholder
+try:
+    _chat_focus = query.get_focus_bid()
+except Exception:
+    _chat_focus = None
+
+if _chat_focus:
+    placeholder = f"Ask about {_chat_focus['bid_name']} bid docs or historical data..."
+else:
+    placeholder = "Ask a question about historical job cost data..."
+
+user_input = st.chat_input(placeholder, disabled=not engine_ok)
 question = pending or user_input
 
 if question and engine_ok:

@@ -21,6 +21,32 @@ class SubcontractAgent(BidAgent):
         funcs["search_lessons_learned"] = EXTENDED_TOOL_FUNCTIONS["search_lessons_learned"]
         return funcs
 
+    def check_document_relevance(self, bid_context: dict) -> dict | None:
+        """Exit early if no documents are uploaded."""
+        docs = bid_context.get("documents", [])
+        if not docs:
+            return {
+                "executive_summary": "No documents uploaded for this bid. Cannot identify subcontract scope.",
+                "flags_count": 0,
+                "identified_packages": [],
+                "self_perform_recommendations": [],
+                "sub_eligible_scopes": [],
+                "procurement_flags": [],
+            }
+
+        total_words = sum(d.get("word_count", 0) or 0 for d in docs)
+        if total_words < 200:
+            return {
+                "executive_summary": f"Uploaded documents contain only {total_words:,} words — insufficient for subcontract scope identification.",
+                "flags_count": 0,
+                "identified_packages": [],
+                "self_perform_recommendations": [],
+                "sub_eligible_scopes": [],
+                "procurement_flags": [],
+            }
+
+        return None
+
     def get_system_prompt(self, bid_context: dict) -> str:
         doc_list = "\n".join(
             f"  - [{d.get('doc_category', 'general')}] {d['filename']} (ID: {d['id']})"

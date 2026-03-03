@@ -17,6 +17,33 @@ class LegalAgent(BidAgent):
         funcs["search_lessons_learned"] = EXTENDED_TOOL_FUNCTIONS["search_lessons_learned"]
         return funcs
 
+    def check_document_relevance(self, bid_context: dict) -> dict | None:
+        """Exit early if no contract-type documents are uploaded."""
+        docs = bid_context.get("documents", [])
+        if not docs:
+            return {
+                "executive_summary": "No documents uploaded for this bid. Cannot perform contract risk analysis.",
+                "risk_rating": None,
+                "flags_count": 1,
+                "findings": [],
+                "missing_provisions": ["No contract documents available for review"],
+                "recommended_clarifications": ["Upload contract documents, general conditions, or RFP with contract terms"],
+            }
+
+        # Check if total word count is very low (likely just a bid form or cover sheet)
+        total_words = sum(d.get("word_count", 0) or 0 for d in docs)
+        if total_words < 200:
+            return {
+                "executive_summary": f"Uploaded documents contain only {total_words:,} words — insufficient for meaningful contract risk analysis. Upload contract terms, general conditions, or RFP documents.",
+                "risk_rating": None,
+                "flags_count": 1,
+                "findings": [],
+                "missing_provisions": ["Contract documents with sufficient content needed"],
+                "recommended_clarifications": ["Upload full contract documents or general conditions"],
+            }
+
+        return None  # Proceed with full analysis
+
     def get_system_prompt(self, bid_context: dict) -> str:
         doc_list = "\n".join(
             f"  - [{d.get('doc_category', 'general')}] {d['filename']} (ID: {d['id']})"
