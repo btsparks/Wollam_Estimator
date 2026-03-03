@@ -1,0 +1,145 @@
+[
+    {
+        "id": "cc-8576-2340", "jobId": "job-8576", "code": "2340",
+        "description": "CW_F/S Walls", "unit": "SF",
+        "budgetQuantity": 15000, "budgetLaborHours": 4500, "budgetLaborCost": 270000, "budgetTotalCost": 270000,
+        "actualQuantity": 15000, "actualLaborHours": 3000, "actualLaborCost": 180000, "actualTotalCost": 180000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2316", "jobId": "job-8576", "code": "2316",
+        "description": "Pour Floor Slab", "unit": "CY",
+        "budgetQuantity": 3000, "budgetLaborHours": 2700, "budgetLaborCost": 162000, "budgetTotalCost": 162000,
+        "actualQuantity": 3000, "actualLaborHours": 2010, "actualLaborCost": 120600, "actualTotalCost": 120600,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2330", "jobId": "job-8576", "code": "2330",
+        "description": "F/S Other Concrete", "unit": "SF",
+        "budgetQuantity": 5000, "budgetLaborHours": 1750, "budgetLaborCost": 105000, "budgetTotalCost": 105000,
+        "actualQuantity": 5000, "actualLaborHours": 1500, "actualLaborCost": 90000, "actualTotalCost": 90000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2342", "jobId": "job-8576", "code": "2342",
+        "description": "CW_Pour Walls", "unit": "CY",
+        "budgetQuantity": 1000, "budgetLaborHours": 900, "budgetLaborCost": 54000, "budgetTotalCost": 54000,
+        "actualQuantity": 1000, "actualLaborHours": 800, "actualLaborCost": 48000, "actualTotalCost": 48000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2374", "jobId": "job-8576", "code": "2374",
+        "description": "CEQ_Pour Pads", "unit": "CY",
+        "budgetQuantity": 1000, "budgetLaborHours": 600, "budgetLaborCost": 36000, "budgetTotalCost": 36000,
+        "actualQuantity": 1000, "actualLaborHours": 500, "actualLaborCost": 30000, "actualTotalCost": 30000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2300", "jobId": "job-8576", "code": "2300",
+        "description": "C_Site Equipment", "unit": "DAY",
+        "budgetQuantity": 300, "budgetEquipmentCost": 250000, "budgetTotalCost": 250000,
+        "actualQuantity": 300, "actualEquipmentCost": 200000, "actualTotalCost": 200000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-3300", "jobId": "job-8576", "code": "3300",
+        "description": "Buy Concrete", "unit": "CY",
+        "budgetQuantity": 5200, "budgetMaterialCost": 1066000, "budgetTotalCost": 1066000,
+        "actualQuantity": 5000, "actualMaterialCost": 1025000, "actualTotalCost": 1025000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-3304", "jobId": "job-8576", "code": "3304",
+        "description": "Buy Embeds & Materials", "unit": "LS",
+        "budgetMaterialCost": 120000, "budgetTotalCost": 120000,
+        "actualMaterialCost": 100000, "actualTotalCost": 100000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-4025", "jobId": "job-8576", "code": "4025",
+        "description": "Rebar Sub", "unit": "LB",
+        "budgetQuantity": 1100000, "budgetSubcontractCost": 2860000, "budgetTotalCost": 2860000,
+        "actualQuantity": 1100000, "actualSubcontractCost": 2600000, "actualTotalCost": 2600000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-4050", "jobId": "job-8576", "code": "4050",
+        "description": "Conc Pump Sub", "unit": "CY",
+        "budgetQuantity": 5200, "budgetSubcontractCost": 500000, "budgetTotalCost": 500000,
+        "actualQuantity": 5000, "actualSubcontractCost": 431400, "actualTotalCost": 431400,
+        "percentComplete": 100
+    },
+
+    {
+        "id": "cc-8576-2405", "jobId": "job-8576", "code": "2405",
+        "description": "SS Pipe EX/BF", "unit": "CY",
+        "budgetQuantity": 2500, "budgetLaborHours": 625, "budgetLaborCost": 9375, "budgetTotalCost": 9375,
+        "actualQuantity": 2500, "actualLaborHours": 500, "actualLaborCost": 7700, "actualTotalCost": 7700,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2410", "jobId": "job-8576", "code": "2410",
+        "description": "SS Pipe Haul String", "unit": "LF",
+        "budgetQuantity": 500, "budgetLaborHours": 800, "budgetLaborCost": 60000, "budgetTotalCost": 60000,
+        "actualQuantity": 500, "actualLaborHours": 600, "actualLaborCost": 50300, "actualTotalCost": 50300,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2415", "jobId": "job-8576", "code": "2415",
+        "description": "SS Pipe Welding", "unit": "EA",
+        "budgetQuantity": 100, "budgetLaborHours": 500, "budgetLaborCost": 35000, "budgetTotalCost": 35000,
+        "actualQuantity": 100, "actualLaborHours": 400, "actualLaborCost": 26500, "actualTotalCost": 26500,
+        "percentComplete": 100
+    },
+
+    {
+        "id": "cc-8576-1000", "jobId": "job-8576", "code": "1000",
+        "description": "Management", "unit": "DAY",
+        "budgetQuantity": 500, "budgetLaborHours": 20000, "budgetLaborCost": 900000, "budgetTotalCost": 900000,
+        "actualQuantity": 450, "actualLaborHours": 16000, "actualLaborCost": 800000, "actualTotalCost": 800000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-1010", "jobId": "job-8576", "code": "1010",
+        "description": "Field Supervision", "unit": "DAY",
+        "budgetQuantity": 500, "budgetLaborHours": 5000, "budgetLaborCost": 400000, "budgetTotalCost": 400000,
+        "actualQuantity": 450, "actualLaborHours": 4500, "actualLaborCost": 300000, "actualTotalCost": 300000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-1012", "jobId": "job-8576", "code": "1012",
+        "description": "Small Tools", "unit": "MO",
+        "budgetQuantity": 18, "budgetTotalCost": 120000,
+        "actualQuantity": 18, "actualTotalCost": 100000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-1013", "jobId": "job-8576", "code": "1013",
+        "description": "Consumables", "unit": "MO",
+        "budgetQuantity": 18, "budgetTotalCost": 120000,
+        "actualQuantity": 18, "actualTotalCost": 100000,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2035", "jobId": "job-8576", "code": "2035",
+        "description": "Training", "unit": "EA",
+        "budgetQuantity": 80, "budgetLaborHours": 480, "budgetLaborCost": 250000, "budgetTotalCost": 250000,
+        "actualQuantity": 100, "actualLaborHours": 600, "actualLaborCost": 200000, "actualTotalCost": 200000,
+        "percentComplete": 100
+    },
+
+    {
+        "id": "cc-8576-2110", "jobId": "job-8576", "code": "2110",
+        "description": "Foundation Excavation", "unit": "CY",
+        "budgetQuantity": 50000, "budgetLaborHours": 3000, "budgetLaborCost": 180000, "budgetTotalCost": 1800000,
+        "actualQuantity": 45000, "actualLaborHours": 2500, "actualLaborCost": 150000, "actualTotalCost": 1590500,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8576-2400", "jobId": "job-8576", "code": "2400",
+        "description": "Structural Steel Erection", "unit": "TON",
+        "budgetQuantity": 200, "budgetLaborHours": 4000, "budgetLaborCost": 240000, "budgetTotalCost": 2200000,
+        "actualQuantity": 200, "actualLaborHours": 3800, "actualLaborCost": 228000, "actualTotalCost": 2000000,
+        "percentComplete": 100
+    }
+]

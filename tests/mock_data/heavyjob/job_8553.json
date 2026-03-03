@@ -1,0 +1,13 @@
+{
+    "id": "job-8553",
+    "jobNumber": "8553",
+    "description": "RTK SPD Pump Station",
+    "status": "Closed",
+    "startDate": "2023-10-01",
+    "endDate": "2025-11-30",
+    "businessUnitId": "bu-wollam-001",
+    "ownerClient": "Rio Tinto Kennecott",
+    "contractType": "Subcontract",
+    "projectType": "Industrial",
+    "location": "Bingham Canyon Mine, Utah"
+}

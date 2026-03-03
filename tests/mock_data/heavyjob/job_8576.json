@@ -1,0 +1,13 @@
+{
+    "id": "job-8576",
+    "jobNumber": "8576",
+    "description": "RTKC 5600 Pump Station",
+    "status": "Closed",
+    "startDate": "2024-01-15",
+    "endDate": "2025-12-15",
+    "businessUnitId": "bu-wollam-001",
+    "ownerClient": "RTKC/Kiewit",
+    "contractType": "Subcontract",
+    "projectType": "Industrial",
+    "location": "Kennecott, Utah"
+}

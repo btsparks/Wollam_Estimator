@@ -1,0 +1,278 @@
+[
+    {
+        "id": "cc-8553-2300", "jobId": "job-8553", "code": "2300",
+        "description": "C_Site Equipment", "unit": "DAY",
+        "budgetQuantity": 185, "budgetEquipmentCost": 393116, "budgetTotalCost": 393116,
+        "actualQuantity": 185, "actualEquipmentCost": 444504, "actualTotalCost": 444504,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2301", "jobId": "job-8553", "code": "2301",
+        "description": "C_Escort Conc Truck", "unit": "CY",
+        "budgetQuantity": 12582, "budgetLaborHours": 532, "budgetLaborCost": 33119, "budgetTotalCost": 33119,
+        "actualQuantity": 12582, "actualLaborHours": 1135, "actualLaborCost": 73154, "actualTotalCost": 73154,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2302", "jobId": "job-8553", "code": "2302",
+        "description": "C_Cold Weather", "unit": "DAY",
+        "budgetQuantity": 66, "budgetLaborHours": 2178, "budgetLaborCost": 169835, "budgetTotalCost": 169835,
+        "actualQuantity": 115, "actualLaborHours": 1508, "actualLaborCost": 124560, "actualTotalCost": 124560,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2304", "jobId": "job-8553", "code": "2304",
+        "description": "C_Rebar Support", "unit": "LB",
+        "budgetQuantity": 2715200, "budgetLaborHours": 1942, "budgetLaborCost": 126254, "budgetTotalCost": 126254,
+        "actualQuantity": 2715200, "actualLaborHours": 2632, "actualLaborCost": 113352, "actualTotalCost": 113352,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2306", "jobId": "job-8553", "code": "2306",
+        "description": "C_Install Formsavers", "unit": "EA",
+        "budgetQuantity": 185, "budgetLaborHours": 185, "budgetLaborCost": 11118, "budgetTotalCost": 11118,
+        "actualQuantity": 306, "actualLaborHours": 306, "actualLaborCost": 11994, "actualTotalCost": 11994,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2308", "jobId": "job-8553", "code": "2308",
+        "description": "C_Install Grout", "unit": "BAG",
+        "budgetQuantity": 13, "budgetLaborHours": 33, "budgetLaborCost": 1733, "budgetTotalCost": 1733,
+        "actualQuantity": 125, "actualLaborHours": 125, "actualLaborCost": 5542, "actualTotalCost": 5542,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2310", "jobId": "job-8553", "code": "2310",
+        "description": "C_Install Bollards", "unit": "EA",
+        "budgetQuantity": 10, "budgetLaborHours": 80, "budgetLaborCost": 8668, "budgetTotalCost": 8668,
+        "actualQuantity": 10, "actualLaborHours": 75, "actualLaborCost": 3476, "actualTotalCost": 3476,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2314", "jobId": "job-8553", "code": "2314",
+        "description": "CMS_F/S Mat Slab", "unit": "SF",
+        "budgetQuantity": 12187, "budgetLaborHours": 4419, "budgetLaborCost": 259562, "budgetTotalCost": 259562,
+        "actualQuantity": 6352, "actualLaborHours": 2592, "actualLaborCost": 99120, "actualTotalCost": 99120,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2316", "jobId": "job-8553", "code": "2316",
+        "description": "CMS_Pour Mat Slab", "unit": "CY",
+        "budgetQuantity": 6936, "budgetLaborHours": 2867, "budgetLaborCost": 165624, "budgetTotalCost": 165624,
+        "actualQuantity": 6150, "actualLaborHours": 941, "actualLaborCost": 107686, "actualTotalCost": 107686,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2324", "jobId": "job-8553", "code": "2324",
+        "description": "CMS_Set Waterstop", "unit": "LF",
+        "budgetQuantity": 1383, "budgetLaborHours": 138, "budgetLaborCost": 9043, "budgetTotalCost": 9043,
+        "actualQuantity": 1383, "actualLaborHours": 328, "actualLaborCost": 11627, "actualTotalCost": 11627,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2330", "jobId": "job-8553", "code": "2330",
+        "description": "CO_F/S Octagon", "unit": "SF",
+        "budgetQuantity": 20074, "budgetLaborHours": 7316, "budgetLaborCost": 423105, "budgetTotalCost": 423105,
+        "actualQuantity": 18437, "actualLaborHours": 7547, "actualLaborCost": 296859, "actualTotalCost": 296859,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2332", "jobId": "job-8553", "code": "2332",
+        "description": "CO_Pour Octagon", "unit": "CY",
+        "budgetQuantity": 2304, "budgetLaborHours": 2388, "budgetLaborCost": 141305, "budgetTotalCost": 141305,
+        "actualQuantity": 896, "actualLaborHours": 673, "actualLaborCost": 25584, "actualTotalCost": 25584,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2334", "jobId": "job-8553", "code": "2334",
+        "description": "CO_Pipe Embeds", "unit": "EA",
+        "budgetQuantity": 6, "budgetLaborHours": 150, "budgetLaborCost": 9128, "budgetTotalCost": 9128,
+        "actualQuantity": 6, "actualLaborHours": 263, "actualLaborCost": 10486, "actualTotalCost": 10486,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2340", "jobId": "job-8553", "code": "2340",
+        "description": "CW_F/S Walls", "unit": "SF",
+        "budgetQuantity": 45853, "budgetLaborHours": 12827, "budgetLaborCost": 741824, "budgetTotalCost": 741824,
+        "actualQuantity": 36646, "actualLaborHours": 10110, "actualLaborCost": 399668, "actualTotalCost": 399668,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2342", "jobId": "job-8553", "code": "2342",
+        "description": "CW_Pour Walls", "unit": "CY",
+        "budgetQuantity": 1656, "budgetLaborHours": 1312, "budgetLaborCost": 77641, "budgetTotalCost": 77641,
+        "actualQuantity": 1595, "actualLaborHours": 1321, "actualLaborCost": 55789, "actualTotalCost": 55789,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2343", "jobId": "job-8553", "code": "2343",
+        "description": "CW_Wall Stair Embeds", "unit": "EA",
+        "budgetQuantity": 10, "budgetLaborHours": 0, "budgetLaborCost": 0, "budgetTotalCost": 0,
+        "actualQuantity": 10, "actualLaborHours": 53, "actualLaborCost": 1982, "actualTotalCost": 1982,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2344", "jobId": "job-8553", "code": "2344",
+        "description": "CW_Set Anchor Bolts", "unit": "EA",
+        "budgetQuantity": 108, "budgetLaborHours": 324, "budgetLaborCost": 17276, "budgetTotalCost": 17276,
+        "actualQuantity": 108, "actualLaborHours": 199, "actualLaborCost": 8033, "actualTotalCost": 8033,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2350", "jobId": "job-8553", "code": "2350",
+        "description": "CLD_F/S Dock", "unit": "SF",
+        "budgetQuantity": 342, "budgetLaborHours": 911, "budgetLaborCost": 52676, "budgetTotalCost": 52676,
+        "actualQuantity": 342, "actualLaborHours": 344, "actualLaborCost": 13231, "actualTotalCost": 13231,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2352", "jobId": "job-8553", "code": "2352",
+        "description": "CLD_Pour Dock", "unit": "CY",
+        "budgetQuantity": 169, "budgetLaborHours": 135, "budgetLaborCost": 7999, "budgetTotalCost": 7999,
+        "actualQuantity": 169, "actualLaborHours": 40, "actualLaborCost": 8772, "actualTotalCost": 8772,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2360", "jobId": "job-8553", "code": "2360",
+        "description": "CPS_EX/BF Supports", "unit": "CY",
+        "budgetQuantity": 276, "budgetLaborHours": 158, "budgetLaborCost": 13581, "budgetTotalCost": 13581,
+        "actualQuantity": 276, "actualLaborHours": 279, "actualLaborCost": 23836, "actualTotalCost": 23836,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2362", "jobId": "job-8553", "code": "2362",
+        "description": "CPS_F/S Supports", "unit": "SF",
+        "budgetQuantity": 8689, "budgetLaborHours": 2835, "budgetLaborCost": 163967, "budgetTotalCost": 163967,
+        "actualQuantity": 4833, "actualLaborHours": 1665, "actualLaborCost": 65858, "actualTotalCost": 65858,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2364", "jobId": "job-8553", "code": "2364",
+        "description": "CPS_Pour Supports", "unit": "CY",
+        "budgetQuantity": 357, "budgetLaborHours": 808, "budgetLaborCost": 47775, "budgetTotalCost": 47775,
+        "actualQuantity": 357, "actualLaborHours": 293, "actualLaborCost": 13743, "actualTotalCost": 13743,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2366", "jobId": "job-8553", "code": "2366",
+        "description": "CPS_Set Anchor Bolts", "unit": "EA",
+        "budgetQuantity": 648, "budgetLaborHours": 662, "budgetLaborCost": 35298, "budgetTotalCost": 35298,
+        "actualQuantity": 648, "actualLaborHours": 307, "actualLaborCost": 12046, "actualTotalCost": 12046,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2368", "jobId": "job-8553", "code": "2368",
+        "description": "CPS_Set Embeds", "unit": "EA",
+        "budgetQuantity": 5, "budgetLaborHours": 25, "budgetLaborCost": 1333, "budgetTotalCost": 1333,
+        "actualQuantity": 5, "actualLaborHours": 42, "actualLaborCost": 1750, "actualTotalCost": 1750,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2370", "jobId": "job-8553", "code": "2370",
+        "description": "CEQ_EX/BF Pads", "unit": "CY",
+        "budgetQuantity": 204, "budgetLaborHours": 181, "budgetLaborCost": 15592, "budgetTotalCost": 15592,
+        "actualQuantity": 204, "actualLaborHours": 119, "actualLaborCost": 10827, "actualTotalCost": 10827,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2372", "jobId": "job-8553", "code": "2372",
+        "description": "CEQ_F/S Pads", "unit": "SF",
+        "budgetQuantity": 4503, "budgetLaborHours": 1304, "budgetLaborCost": 77085, "budgetTotalCost": 77085,
+        "actualQuantity": 4370, "actualLaborHours": 1870, "actualLaborCost": 75699, "actualTotalCost": 75699,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2374", "jobId": "job-8553", "code": "2374",
+        "description": "CEQ_Pour Pads", "unit": "CY",
+        "budgetQuantity": 827, "budgetLaborHours": 664, "budgetLaborCost": 39286, "budgetTotalCost": 39286,
+        "actualQuantity": 827, "actualLaborHours": 463, "actualLaborCost": 26164, "actualTotalCost": 26164,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2376", "jobId": "job-8553", "code": "2376",
+        "description": "CEQ_Set Anchor Bolts", "unit": "EA",
+        "budgetQuantity": 144, "budgetLaborHours": 216, "budgetLaborCost": 45517, "budgetTotalCost": 45517,
+        "actualQuantity": 144, "actualLaborHours": 458, "actualLaborCost": 19603, "actualTotalCost": 19603,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2380", "jobId": "job-8553", "code": "2380",
+        "description": "F_Offload Foam", "unit": "EA",
+        "budgetQuantity": 689, "budgetLaborHours": 227, "budgetLaborCost": 15411, "budgetTotalCost": 15411,
+        "actualQuantity": 689, "actualLaborHours": 157, "actualLaborCost": 8448, "actualTotalCost": 8448,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-2382", "jobId": "job-8553", "code": "2382",
+        "description": "F_Install Foam", "unit": "EA",
+        "budgetQuantity": 689, "budgetLaborHours": 1080, "budgetLaborCost": 101528, "budgetTotalCost": 101528,
+        "actualQuantity": 689, "actualLaborHours": 991, "actualLaborCost": 47698, "actualTotalCost": 47698,
+        "percentComplete": 100
+    },
+
+    {
+        "id": "cc-8553-3300", "jobId": "job-8553", "code": "3300",
+        "description": "Buy Concrete", "unit": "CY",
+        "budgetQuantity": 12250, "budgetMaterialCost": 2478654, "budgetTotalCost": 2478654,
+        "actualQuantity": 10040, "actualMaterialCost": 2058274, "actualTotalCost": 2058274,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-3302", "jobId": "job-8553", "code": "3302",
+        "description": "Buy Conc Materials", "unit": "LS",
+        "budgetMaterialCost": 228504, "budgetTotalCost": 228504,
+        "actualMaterialCost": 183886, "actualTotalCost": 183886,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-3304", "jobId": "job-8553", "code": "3304",
+        "description": "Buy Embeds", "unit": "LS",
+        "budgetMaterialCost": 263677, "budgetTotalCost": 263677,
+        "actualMaterialCost": 153186, "actualTotalCost": 153186,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-3310", "jobId": "job-8553", "code": "3310",
+        "description": "Buy Grout", "unit": "LS",
+        "budgetMaterialCost": 38287, "budgetTotalCost": 38287,
+        "actualMaterialCost": 4736, "actualTotalCost": 4736,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-3360", "jobId": "job-8553", "code": "3360",
+        "description": "Buy Foam (Geofoam)", "unit": "LS",
+        "budgetMaterialCost": 757985, "budgetTotalCost": 757985,
+        "actualMaterialCost": 489457, "actualTotalCost": 489457,
+        "percentComplete": 100
+    },
+
+    {
+        "id": "cc-8553-4025", "jobId": "job-8553", "code": "4025",
+        "description": "Rebar Sub (Champion/Iron Mtn)", "unit": "LB",
+        "budgetQuantity": 2715200, "budgetSubcontractCost": 3659718, "budgetTotalCost": 3659718,
+        "actualQuantity": 2715200, "actualSubcontractCost": 3539407, "actualTotalCost": 3539407,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-4050", "jobId": "job-8553", "code": "4050",
+        "description": "Conc Pump Sub (Brundage Bone)", "unit": "CY",
+        "budgetQuantity": 12250, "budgetSubcontractCost": 342099, "budgetTotalCost": 342099,
+        "actualQuantity": 10040, "actualSubcontractCost": 148587, "actualTotalCost": 148587,
+        "percentComplete": 100
+    },
+    {
+        "id": "cc-8553-4075", "jobId": "job-8553", "code": "4075",
+        "description": "Sawcut Sub", "unit": "LS",
+        "budgetSubcontractCost": 1800, "budgetTotalCost": 1800,
+        "actualSubcontractCost": 9854, "actualTotalCost": 9854,
+        "percentComplete": 100
+    },
+
+    {
+        "id": "cc-8553-2716", "jobId": "job-8553", "code": "2716",
+        "description": "Flanged Bolt-up 20-28in RLS/CS", "unit": "JT",
+        "budgetQuantity": 42, "budgetLaborHours": 336, "budgetLaborCost": 20160, "budgetTotalCost": 20160,
+        "actualQuantity": 42, "actualLaborHours": 294, "actualLaborCost": 17640, "actualTotalCost": 17640,
+        "percentComplete": 100
+    }
+]
