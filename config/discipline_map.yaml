@@ -1,0 +1,88 @@
+# Wollam Construction — Cost Code to Discipline Mapping
+# Used by app/transform/mapper.py
+#
+# Wollam uses 4-digit cost codes in HCSS HeavyJob. The first 2 digits
+# generally indicate the discipline, but there are exceptions that
+# require specific overrides. This config handles all known patterns.
+
+disciplines:
+  general_conditions:
+    name: "General Conditions"
+    code_prefixes: ["10", "20"]
+    subcategories:
+      management: ["1005", "1010", "1019", "1026"]
+      site: ["1030", "1035", "1040", "1060", "1098"]
+      training: ["2035", "2036"]
+
+  earthwork:
+    name: "Earthwork"
+    code_prefixes: ["21"]
+    material_prefixes: ["31"]
+    subcategories:
+      excavation: ["2110"]
+      backfill: ["2115"]
+      structural_fill: ["2120"]
+
+  concrete:
+    name: "Concrete"
+    code_prefixes: ["22", "23"]
+    material_prefixes: ["33"]
+    sub_prefixes: ["40"]
+    subcategories:
+      rebar: ["2200"]
+      forming: ["2205", "2215"]
+      pouring: ["2210", "2220"]
+      accessories: ["2225", "2235"]
+      vaults: ["2240"]
+      cold_weather: ["2202"]
+      site_equipment: ["2203"]
+      escort: ["2201"]
+
+  structural_steel:
+    name: "Structural Steel"
+    code_prefixes: ["24"]
+    material_prefixes: ["34"]
+    sub_prefixes: ["42"]
+
+  mechanical_piping:
+    name: "Mechanical / Piping"
+    code_prefixes: ["26", "27"]
+    material_prefixes: ["32"]
+    subcategories:
+      hdpe: ["2305"]
+      structural_steel_install: ["2310"]
+      pumps: ["2330"]
+      ehouse: ["2335"]
+      ss_header: ["2340"]
+      l_panels: ["2365"]
+      site_equipment: ["2300"]
+      touch_up_paint: ["2320"]
+
+  ss_pipe_conveyance:
+    name: "Stainless Steel Pipe Conveyance"
+    specific_codes: ["2405", "2410", "2415"]
+    subcategories:
+      excavation_backfill: ["2405"]
+      haul_string: ["2410"]
+      welding: ["2415"]
+
+  electrical:
+    name: "Electrical"
+    code_prefixes: ["28"]
+    sub_prefixes: ["41"]
+
+  change_orders:
+    name: "Change Orders / Extra Work"
+    code_prefixes: ["50", "51", "52", "53", "54"]
+
+# Manual overrides for specific cost codes that do not follow prefix rules.
+# These take highest priority in the mapping logic.
+overrides:
+  "2036": "general_conditions"
+  "3015": "concrete"
+  "4040": "concrete"
+  "5100": "ss_pipe_conveyance"
+  "5105": "ss_pipe_conveyance"
+  "5110": "mechanical_piping"
+  "5115": "mechanical_piping"
+  "5120": "mechanical_piping"

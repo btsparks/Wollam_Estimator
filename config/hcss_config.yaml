@@ -1,0 +1,25 @@
+hcss:
+  identity_url: "https://api.hcss.com/identity"
+  heavyjob_url: "https://api.hcss.com/heavyjob"
+  heavybid_url: "https://api.hcss.com/heavybid"
+  # Credentials loaded from environment variables:
+  # HCSS_CLIENT_ID
+  # HCSS_CLIENT_SECRET
+  default_business_unit: ""  # Set after first API connection
+
+sync:
+  lookback_days: 365
+  min_job_value: 50000
+  auto_sync_interval: 0       # 0 = manual only
+  batch_size: 10
+
+rate_calculation:
+  default_labor_rate: 55.00   # $/MH blended rate for MH estimation from dollar data
+  variance_threshold: 20      # percent variance that triggers PM interview question
+  min_quantity_threshold: 10  # minimum quantity for rate to be meaningful
+  recommended_rate_bias: 0.8  # weight toward actual when actual < budget (0 to 1)
+
+confidence:
+  strong_min_pct_complete: 90
+  moderate_min_pct_complete: 50
+  min_data_points_for_strong: 2

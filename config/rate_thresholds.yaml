@@ -1,0 +1,40 @@
+# Validation thresholds for rate calculations
+# Used by app/transform/validator.py
+#
+# These thresholds catch data entry errors and outliers.
+# A rate outside these bounds isn't necessarily wrong — it just
+# gets flagged for human review.
+
+labor_mh_per_unit:
+  min: 0.01
+  max: 100.0
+
+cost_per_unit:
+  max_ratio: 10.0
+
+production_rates:
+  min_quantity: 10
+  min_hours: 8
+
+# Discipline-specific thresholds based on Wollam historical data.
+# 'typical' is the midpoint for sanity checking.
+concrete:
+  forming_mh_sf:
+    min: 0.05
+    max: 1.0
+    typical: 0.25
+  pour_mh_cy:
+    min: 0.10
+    max: 3.0
+    typical: 0.80
+
+earthwork:
+  excavation_cost_cy:
+    min: 0.50
+    max: 25.0
+    typical: 5.00
+
+piping:
+  weld_mh_joint:
+    min: 0.5
+    max: 25.0
