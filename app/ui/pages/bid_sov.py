@@ -30,7 +30,7 @@ async def bid_sov_page(item: str = ""):
     # Require focus bid
     focus = query.get_focus_bid()
     if not focus:
-        with ui.column().classes("w-full gap-4 nicegui-content"):
+        with ui.column().classes("w-full nicegui-content").style("gap: 1rem"):
             page_header("Schedule of Values",
                         "Define bid items and break them down into estimating activities")
             empty_state(
@@ -50,19 +50,19 @@ async def bid_sov_page(item: str = ""):
     ed_item_id = {"value": None}
 
     with ui.dialog() as edit_dialog, ui.card().style("min-width: 500px"):
-        ui.label("Edit Bid Item").classes("text-lg font-bold").style("color: #1B4F72")
-        with ui.column().classes("w-full gap-3"):
-            ed_num = ui.input("Item #").classes("w-full").props("outlined dense")
-            ed_desc = ui.input("Description").classes("w-full").props("outlined dense")
-            with ui.row().classes("w-full gap-3"):
-                ed_qty = ui.number("Qty", value=None).classes("flex-1").props("outlined dense")
+        ui.label("Edit Bid Item").classes("text-h6 text-weight-bold text-primary")
+        with ui.column().classes("w-full").style("gap: 0.75rem"):
+            ed_num = ui.input("Item #").classes("w-full")
+            ed_desc = ui.input("Description").classes("w-full")
+            with ui.row().classes("w-full").style("gap: 0.75rem"):
+                ed_qty = ui.number("Qty", value=None).classes("flex-1")
                 ed_unit = ui.select(
                     {u: u for u in UNITS}, value=None, label="Unit",
                     with_input=True, new_value_mode="add-unique",
-                ).classes("flex-1").props("outlined dense")
-            ed_notes = ui.input("Notes").classes("w-full").props("outlined dense")
+                ).classes("flex-1")
+            ed_notes = ui.input("Notes").classes("w-full")
 
-        with ui.row().classes("w-full justify-between mt-4"):
+        with ui.row().classes("w-full justify-between q-mt-md"):
             def delete_item():
                 iid = ed_item_id["value"]
                 if iid:
@@ -73,8 +73,8 @@ async def bid_sov_page(item: str = ""):
                     _nav_sov()
             ui.button("Delete", icon="delete", on_click=delete_item).props("color=negative flat")
 
-            with ui.row().classes("gap-2"):
-                ui.button("Cancel", on_click=edit_dialog.close).props("flat")
+            with ui.row().style("gap: 0.5rem"):
+                ui.button("Cancel", on_click=edit_dialog.close).props("outline color=grey-8")
 
                 def save_item():
                     iid = ed_item_id["value"]
@@ -97,24 +97,24 @@ async def bid_sov_page(item: str = ""):
     act_parent_id = {"value": None}
 
     with ui.dialog() as add_act_dialog, ui.card().style("min-width: 560px"):
-        ui.label("Add Activity").classes("text-lg font-bold").style("color: #1B4F72")
-        act_parent_display = ui.label("").classes("text-sm text-gray-500")
+        ui.label("Add Activity").classes("text-h6 text-weight-bold text-primary")
+        act_parent_display = ui.label("").classes("text-caption text-grey-7")
 
-        with ui.column().classes("w-full gap-3 mt-2"):
-            with ui.row().classes("w-full gap-3"):
-                act_num = ui.input("Activity #").classes("w-24").props("outlined dense")
+        with ui.column().classes("w-full q-mt-sm").style("gap: 0.75rem"):
+            with ui.row().classes("w-full").style("gap: 0.75rem"):
+                act_num = ui.input("Activity #").classes("w-24")
                 act_desc = ui.input("Description *", placeholder="e.g., Excavate footings") \
-                    .classes("flex-1").props("outlined dense")
-            with ui.row().classes("w-full gap-3"):
-                act_qty = ui.number("Qty", value=None).classes("flex-1").props("outlined dense")
+                    .classes("flex-1")
+            with ui.row().classes("w-full").style("gap: 0.75rem"):
+                act_qty = ui.number("Qty", value=None).classes("flex-1")
                 act_unit = ui.select(
                     {u: u for u in UNITS}, value=None, label="Unit",
                     with_input=True, new_value_mode="add-unique",
-                ).classes("flex-1").props("outlined dense")
-            act_notes = ui.input("Notes").classes("w-full").props("outlined dense")
+                ).classes("flex-1")
+            act_notes = ui.input("Notes").classes("w-full")
 
-        with ui.row().classes("w-full justify-end mt-4 gap-2"):
-            ui.button("Cancel", on_click=add_act_dialog.close).props("flat")
+        with ui.row().classes("w-full justify-end q-mt-md").style("gap: 0.5rem"):
+            ui.button("Cancel", on_click=add_act_dialog.close).props("outline color=grey-8")
 
             def save_new_activity():
                 pid = act_parent_id["value"]
@@ -142,22 +142,22 @@ async def bid_sov_page(item: str = ""):
     ed_act_parent_id = {"value": None}
 
     with ui.dialog() as edit_act_dialog, ui.card().style("min-width: 560px"):
-        ui.label("Edit Activity").classes("text-lg font-bold").style("color: #1B4F72")
-        ea_parent_display = ui.label("").classes("text-sm text-gray-500")
+        ui.label("Edit Activity").classes("text-h6 text-weight-bold text-primary")
+        ea_parent_display = ui.label("").classes("text-caption text-grey-7")
 
-        with ui.column().classes("w-full gap-3 mt-2"):
-            with ui.row().classes("w-full gap-3"):
-                ea_num = ui.input("Activity #").classes("w-24").props("outlined dense")
-                ea_desc = ui.input("Description").classes("flex-1").props("outlined dense")
-            with ui.row().classes("w-full gap-3"):
-                ea_qty = ui.number("Qty", value=None).classes("flex-1").props("outlined dense")
+        with ui.column().classes("w-full q-mt-sm").style("gap: 0.75rem"):
+            with ui.row().classes("w-full").style("gap: 0.75rem"):
+                ea_num = ui.input("Activity #").classes("w-24")
+                ea_desc = ui.input("Description").classes("flex-1")
+            with ui.row().classes("w-full").style("gap: 0.75rem"):
+                ea_qty = ui.number("Qty", value=None).classes("flex-1")
                 ea_unit = ui.select(
                     {u: u for u in UNITS}, value=None, label="Unit",
                     with_input=True, new_value_mode="add-unique",
-                ).classes("flex-1").props("outlined dense")
-            ea_notes = ui.input("Notes").classes("w-full").props("outlined dense")
+                ).classes("flex-1")
+            ea_notes = ui.input("Notes").classes("w-full")
 
-        with ui.row().classes("w-full justify-between mt-4"):
+        with ui.row().classes("w-full justify-between q-mt-md"):
             def delete_activity():
                 aid = ed_act_id["value"]
                 if aid:
@@ -167,8 +167,8 @@ async def bid_sov_page(item: str = ""):
                     _nav_sov(ed_act_parent_id["value"])
             ui.button("Delete", icon="delete", on_click=delete_activity).props("color=negative flat")
 
-            with ui.row().classes("gap-2"):
-                ui.button("Cancel", on_click=edit_act_dialog.close).props("flat")
+            with ui.row().style("gap: 0.5rem"):
+                ui.button("Cancel", on_click=edit_act_dialog.close).props("outline color=grey-8")
 
                 def save_activity_edit():
                     aid = ed_act_id["value"]
@@ -188,12 +188,12 @@ async def bid_sov_page(item: str = ""):
                 ui.button("Save", icon="save", on_click=save_activity_edit).props("color=primary")
 
     # ═══ Main Content ═══
-    with ui.column().classes("w-full gap-4 nicegui-content"):
+    with ui.column().classes("w-full nicegui-content").style("gap: 1rem"):
         page_header("Schedule of Values",
                      "Define bid items and break them down into estimating activities")
-        ui.label(f"Building SOV for: {bid_name}").classes("text-sm text-gray-500")
+        ui.label(f"Building SOV for: {bid_name}").classes("text-caption text-grey-7")
         # KPI Row
-        with ui.row().classes("w-full gap-4"):
+        with ui.row().classes("w-full").style("gap: 1rem"):
             with ui.column().classes("flex-1"):
                 metric_card("Bid Items", len(items), icon="receipt_long")
             with ui.column().classes("flex-1"):
@@ -213,17 +213,17 @@ async def bid_sov_page(item: str = ""):
 
         with ui.expansion("Add Bid Item", icon="add_circle").classes("w-full"):
             with ui.card().classes("w-full"):
-                with ui.row().classes("w-full gap-3 flex-wrap items-end"):
+                with ui.row().classes("w-full flex-wrap items-end").style("gap: 0.75rem"):
                     item_num = ui.input("Item #", value=str(len(items) + 1)) \
-                        .classes("w-20").props("outlined dense")
+                        .classes("w-20")
                     desc_in = ui.input("Description *", placeholder="e.g., Concrete Foundations") \
-                        .classes("flex-1 min-w-48").props("outlined dense")
+                        .classes("flex-1 min-w-48")
                     qty_in = ui.number("Qty", value=None, step=1) \
-                        .classes("w-24").props("outlined dense")
+                        .classes("w-24")
                     unit_in = ui.select(
                         {u: u for u in UNITS}, value=None, label="Unit",
                         with_input=True, new_value_mode="add-unique",
-                    ).classes("w-24").props("outlined dense")
+                    ).classes("w-24")
 
                     def add_item():
                         if not desc_in.value:
@@ -244,9 +244,9 @@ async def bid_sov_page(item: str = ""):
         # ═══ Bulk Paste ═══
         with ui.expansion("Bulk Paste (from spreadsheet)", icon="content_paste").classes("w-full"):
             ui.label("Paste tab-separated: Item# | Description | Qty | Unit") \
-                .classes("text-sm text-gray-500")
+                .classes("text-caption text-grey-7")
             paste_area = ui.textarea(placeholder="Paste rows here...") \
-                .classes("w-full").props("outlined rows=5")
+                .classes("w-full").props("rows=5")
 
             def process_paste():
                 text = paste_area.value
@@ -283,7 +283,7 @@ async def bid_sov_page(item: str = ""):
                 ui.notify(f"Added {count} bid items", type="positive")
                 _nav_sov(last_id if count and last_id else None)
             ui.button("Import Lines", icon="upload", on_click=process_paste) \
-                .props("color=primary").classes("mt-2")
+                .props("color=primary").classes("q-mt-sm")
 
         ui.separator()
 
@@ -320,7 +320,7 @@ async def bid_sov_page(item: str = ""):
                 selector_options[it["id"]] = f"{num_str}{it['description']}{suffix}"
 
             # ── Item Selector Bar ──
-            with ui.row().classes("w-full items-center gap-2"):
+            with ui.row().classes("w-full items-center").style("gap: 0.5rem"):
                 def go_prev():
                     if focused_idx > 0:
                         _nav_sov(item_ids[focused_idx - 1])
@@ -340,13 +340,13 @@ async def bid_sov_page(item: str = ""):
                 ui.select(
                     selector_options, value=focused_id,
                     on_change=on_select_change, with_input=True,
-                ).classes("flex-1").props("outlined dense")
+                ).classes("flex-1")
 
                 ui.button(icon="chevron_right", on_click=go_next) \
                     .props(f"flat round size=sm {'disable' if focused_idx >= len(item_ids) - 1 else ''}")
 
                 ui.label(f"{focused_idx + 1} / {len(items)}") \
-                    .classes("text-sm text-gray-500 whitespace-nowrap")
+                    .classes("text-caption text-grey-7 whitespace-nowrap")
 
             # ── Focused Item Card ──
             _render_focused_item(
@@ -359,7 +359,7 @@ async def bid_sov_page(item: str = ""):
                 ea_num, ea_desc, ea_qty, ea_unit, ea_notes,
             )
 
-            with ui.row().classes("mt-3 gap-2"):
+            with ui.row().classes("q-mt-md").style("gap: 0.5rem"):
                 def do_clear_all():
                     for item in items:
                         query.delete_activities_for_item(item["id"])
@@ -393,11 +393,11 @@ def _render_focused_item(item, bid_id,
     with ui.card().classes("w-full"):
         # ── Header row ──
         with ui.row().classes("w-full items-center justify-between"):
-            with ui.row().classes("items-center gap-3"):
-                ui.icon("receipt_long").classes("text-2xl").style("color: #1B4F72")
+            with ui.row().classes("items-center").style("gap: 0.75rem"):
+                ui.icon("receipt_long").classes("text-2xl text-primary")
                 with ui.column().classes("gap-0"):
                     ui.label(f"{num_display}{item['description']}") \
-                        .classes("text-lg font-bold").style("color: #1B4F72")
+                        .classes("text-h6 text-weight-bold text-primary")
                     sub_parts = []
                     if item.get("quantity"):
                         sub_parts.append(f"{item['quantity']:,.0f} {item.get('unit') or ''}")
@@ -406,9 +406,9 @@ def _render_focused_item(item, bid_id,
                     if item.get("notes"):
                         sub_parts.append(item["notes"])
                     if sub_parts:
-                        ui.label(" · ".join(sub_parts)).classes("text-sm text-gray-500")
+                        ui.label(" · ".join(sub_parts)).classes("text-caption text-grey-7")
 
-            with ui.row().classes("items-center gap-2"):
+            with ui.row().classes("items-center").style("gap: 0.5rem"):
                 if act_count:
                     color = "green" if act_total else "amber"
                     ui.badge(badge_text, color=color).props("outline")
@@ -436,9 +436,9 @@ def _render_focused_item(item, bid_id,
             )
         else:
             ui.label("No activities yet. Add the first activity below.") \
-                .classes("text-sm text-gray-400 italic py-2")
+                .classes("text-caption text-grey-6 italic py-2")
 
-        with ui.row().classes("mt-2"):
+        with ui.row().classes("q-mt-sm"):
             def open_add_act(item_id=item["id"], item_data=item):
                 act_parent_id["value"] = item_id
                 num_str = f"#{item_data.get('item_number', '')} " if item_data.get("item_number") else ""
@@ -530,18 +530,18 @@ def _render_scope_section(item: dict, bid_id: int):
     cached_analysis = state.get(cache_key)
     chat_history = state.get(chat_key, [])
 
-    with ui.row().classes("items-center gap-2"):
-        ui.icon("psychology").classes("text-lg").style("color: #1B4F72")
-        ui.label("Scope Intelligence").classes("text-sm font-bold").style("color: #1B4F72")
+    with ui.row().classes("items-center").style("gap: 0.5rem"):
+        ui.icon("psychology").classes("text-lg text-primary")
+        ui.label("Scope Intelligence").classes("text-body2 text-weight-bold text-primary")
         if cached_analysis:
             ui.badge("Analyzed", color="green").props("outline")
 
     if not cached_analysis:
         # Show analyze button
-        with ui.row().classes("items-center gap-3 mt-1"):
+        with ui.row().classes("items-center q-mt-xs").style("gap: 0.75rem"):
             ui.label(
                 "AI-powered analysis of bid documents for this line item"
-            ).classes("text-xs text-gray-500")
+            ).classes("text-caption text-grey-7")
 
             async def run_analysis(bid=bid_id, desc=description, num=item_number,
                                    key=cache_key, iid=item_id):
@@ -562,18 +562,18 @@ def _render_scope_section(item: dict, bid_id: int):
                 "Analyze Scope", icon="psychology", on_click=run_analysis
             ).props("color=primary outline size=sm")
 
-        spinner_row = ui.row().classes("items-center gap-2 mt-1")
+        spinner_row = ui.row().classes("items-center q-mt-xs").style("gap: 0.5rem")
         spinner_row.set_visibility(False)
         with spinner_row:
-            ui.spinner("dots", size="md").style("color: #1B4F72")
-            ui.label("Analyzing bid documents...").classes("text-sm text-gray-600")
+            ui.spinner("dots", size="md").classes("text-primary")
+            ui.label("Analyzing bid documents...").classes("text-body2 text-grey-8")
     else:
         # Show cached analysis
-        with ui.card().classes("w-full mt-2 bg-blue-50"):
-            ui.markdown(cached_analysis).classes("text-sm scope-analysis")
+        with ui.card().classes("w-full q-mt-sm bg-blue-1"):
+            ui.markdown(cached_analysis).classes("text-body2 scope-analysis")
 
             # Clear analysis button
-            with ui.row().classes("justify-end mt-1"):
+            with ui.row().classes("justify-end q-mt-xs"):
                 def clear_analysis(key=cache_key, ckey=chat_key, iid=item_id):
                     state.pop(key)
                     state.pop(ckey)
@@ -582,7 +582,7 @@ def _render_scope_section(item: dict, bid_id: int):
                           on_click=clear_analysis).props("flat size=xs color=grey")
 
         # Follow-up chat
-        with ui.column().classes("w-full mt-2 gap-1"):
+        with ui.column().classes("w-full q-mt-sm").style("gap: 0.25rem"):
             if chat_history:
                 for msg in chat_history:
                     if msg["role"] == "user":
@@ -596,10 +596,10 @@ def _render_scope_section(item: dict, bid_id: int):
                                 msg["content"], name="WEIS", sent=False
                             ).classes("max-w-lg")
 
-            with ui.row().classes("w-full items-end gap-2"):
+            with ui.row().classes("w-full items-end").style("gap: 0.5rem"):
                 scope_input = ui.input(
                     placeholder="Ask about this bid item's scope..."
-                ).classes("flex-1").props("outlined dense")
+                ).classes("flex-1")
 
                 async def send_question(
                     bid=bid_id, desc=description, analysis=cached_analysis,
