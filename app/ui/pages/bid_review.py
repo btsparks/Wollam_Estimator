@@ -27,10 +27,10 @@ async def bid_review_page():
         focus_bid = query.get_focus_bid()
         if not focus_bid:
             empty_state(
-                "No focus bid set. Go to Active Bids and set a focus bid first.",
+                "Select a bid from the dashboard to get started.",
                 icon="gavel",
-                action_label="Active Bids",
-                action_url="/active-bids",
+                action_label="Go to Dashboard",
+                action_url="/",
             )
             return
 
@@ -59,8 +59,8 @@ async def bid_review_page():
                 ui.label("Total Words").classes("text-caption text-grey-7 uppercase")
 
         if not docs:
-            empty_state("No documents uploaded yet. Upload bid documents on Active Bids first.",
-                        icon="upload_file", action_label="Active Bids", action_url="/active-bids")
+            empty_state("No documents uploaded yet. Upload bid documents from the dashboard.",
+                        icon="upload_file", action_label="Go to Dashboard", action_url="/")
             return
 
         ui.separator()

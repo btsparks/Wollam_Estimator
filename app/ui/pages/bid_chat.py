@@ -51,10 +51,10 @@ async def bid_chat_page():
         focus_bid = query.get_focus_bid()
         if not focus_bid:
             empty_state(
-                "No focus bid set. Go to Active Bids and set a focus bid first.",
+                "Select a bid from the dashboard to get started.",
                 icon="gavel",
-                action_label="Active Bids",
-                action_url="/active-bids",
+                action_label="Go to Dashboard",
+                action_url="/",
             )
             return
 
@@ -84,7 +84,7 @@ async def bid_chat_page():
 
         if not docs:
             empty_state("No documents uploaded yet.", icon="upload_file",
-                        action_label="Active Bids", action_url="/active-bids")
+                        action_label="Go to Dashboard", action_url="/")
             return
 
         ui.separator()

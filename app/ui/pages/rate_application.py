@@ -21,10 +21,10 @@ async def rate_application_page():
             page_header("Rate Application",
                         "Apply Knowledge Base rates to estimating activities")
             empty_state(
-                "Set a focus bid on the Active Bids page first.",
+                "Select a bid from the dashboard to get started.",
                 icon="price_change",
-                action_label="Go to Active Bids",
-                action_url="/active-bids",
+                action_label="Go to Dashboard",
+                action_url="/",
             )
         return
 

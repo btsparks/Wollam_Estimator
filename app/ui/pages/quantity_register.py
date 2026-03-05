@@ -21,10 +21,10 @@ async def quantity_register_page():
             page_header("Quantity Register",
                         "Compare owner-provided vs PM-verified quantities")
             empty_state(
-                "Set a focus bid on the Active Bids page to view its Quantity Register.",
+                "Select a bid from the dashboard to get started.",
                 icon="straighten",
-                action_label="Go to Active Bids",
-                action_url="/active-bids",
+                action_label="Go to Dashboard",
+                action_url="/",
             )
         return
 

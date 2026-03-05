@@ -34,10 +34,10 @@ async def bid_sov_page(item: str = ""):
             page_header("Schedule of Values",
                         "Define bid items and break them down into estimating activities")
             empty_state(
-                "Set a focus bid on the Active Bids page to build its SOV.",
+                "Select a bid from the dashboard to get started.",
                 icon="receipt_long",
-                action_label="Go to Active Bids",
-                action_url="/active-bids",
+                action_label="Go to Dashboard",
+                action_url="/",
             )
         return
 
