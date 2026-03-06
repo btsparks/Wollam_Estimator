@@ -24,8 +24,10 @@ class TestHCSSAuth:
         auth = HCSSAuth(client_id="", client_secret="")
         assert auth.is_configured is False
 
-    def test_auth_not_configured_none_credentials(self):
-        """None credentials should report is_configured = False."""
+    def test_auth_not_configured_none_credentials(self, monkeypatch):
+        """None credentials (with no env vars) should report is_configured = False."""
+        monkeypatch.delenv("HCSS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("HCSS_CLIENT_SECRET", raising=False)
         auth = HCSSAuth(client_id=None, client_secret=None)
         assert auth.is_configured is False
 
@@ -100,8 +102,8 @@ class TestSyncOrchestrator:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_sync_all_raises_not_implemented(self):
-        """sync_all_closed_jobs raises NotImplementedError (Phase D stub)."""
+    async def test_sync_all_raises_without_sources(self):
+        """sync_all_closed_jobs raises RuntimeError without data sources."""
         sync = HCSSSyncOrchestrator()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(RuntimeError, match="No data sources configured"):
             await sync.sync_all_closed_jobs()

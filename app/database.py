@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "1.3"
+SCHEMA_VERSION = "1.6"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -340,6 +340,67 @@ CREATE TABLE IF NOT EXISTS bid_chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_bid_chat_bid ON bid_chat_messages(bid_id);
+
+-- ============================================================
+-- Bid Schedule of Values (Phase 4 — SOV Module)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS bid_sov_item (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id              INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+    item_number         TEXT,
+    description         TEXT NOT NULL,
+    quantity            REAL,
+    unit                TEXT,
+    owner_amount        REAL,
+    cost_code           TEXT,
+    discipline          TEXT,
+    mapped_by           TEXT DEFAULT 'manual',
+    unit_price          REAL,
+    total_price         REAL,
+    rate_source         TEXT,
+    rate_confidence     TEXT,
+    notes               TEXT,
+    sort_order          INTEGER DEFAULT 0,
+    pm_quantity         REAL,
+    pm_unit             TEXT,
+    quantity_status     TEXT DEFAULT 'pending',
+    quantity_notes      TEXT,
+    quantity_verified_at DATETIME,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_bid_sov_bid ON bid_sov_item(bid_id);
+CREATE INDEX IF NOT EXISTS idx_bid_sov_cost_code ON bid_sov_item(cost_code);
+
+-- ============================================================
+-- Bid Activities (Phase 4b — Activity-level estimating)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS bid_activity (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_sov_item_id     INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+    activity_number     TEXT,
+    description         TEXT NOT NULL,
+    quantity            REAL,
+    unit                TEXT,
+    unit_rate_mh        REAL,
+    labor_rate          REAL,
+    unit_price          REAL,
+    total_price         REAL,
+    cost_code           TEXT,
+    discipline          TEXT,
+    source              TEXT DEFAULT 'manual',
+    confidence          TEXT,
+    notes               TEXT,
+    sort_order          INTEGER DEFAULT 0,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_bid_activity_sov_item ON bid_activity(bid_sov_item_id);
+CREATE INDEX IF NOT EXISTS idx_bid_activity_cost_code ON bid_activity(cost_code);
 """
 
 
@@ -465,6 +526,84 @@ def _migrate_1_2_to_1_3(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '1.3'")
 
 
+def _migrate_1_3_to_1_4(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.3 to 1.4: add bid_sov_item table."""
+    sov_sql = """
+    CREATE TABLE IF NOT EXISTS bid_sov_item (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id              INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+        item_number         TEXT,
+        description         TEXT NOT NULL,
+        quantity            REAL,
+        unit                TEXT,
+        owner_amount        REAL,
+        cost_code           TEXT,
+        discipline          TEXT,
+        mapped_by           TEXT DEFAULT 'manual',
+        unit_price          REAL,
+        total_price         REAL,
+        rate_source         TEXT,
+        rate_confidence     TEXT,
+        notes               TEXT,
+        sort_order          INTEGER DEFAULT 0,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bid_sov_bid ON bid_sov_item(bid_id);
+    CREATE INDEX IF NOT EXISTS idx_bid_sov_cost_code ON bid_sov_item(cost_code);
+    """
+    conn.executescript(sov_sql)
+    conn.execute("UPDATE schema_version SET version = '1.4'")
+
+
+def _migrate_1_4_to_1_5(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.4 to 1.5: add PM quantity columns to bid_sov_item."""
+    for col_sql in [
+        "ALTER TABLE bid_sov_item ADD COLUMN pm_quantity REAL",
+        "ALTER TABLE bid_sov_item ADD COLUMN pm_unit TEXT",
+        "ALTER TABLE bid_sov_item ADD COLUMN quantity_status TEXT DEFAULT 'pending'",
+        "ALTER TABLE bid_sov_item ADD COLUMN quantity_notes TEXT",
+        "ALTER TABLE bid_sov_item ADD COLUMN quantity_verified_at DATETIME",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+    conn.execute("UPDATE schema_version SET version = '1.5'")
+
+
+def _migrate_1_5_to_1_6(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.5 to 1.6: add bid_activity table."""
+    activity_sql = """
+    CREATE TABLE IF NOT EXISTS bid_activity (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_sov_item_id     INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+        activity_number     TEXT,
+        description         TEXT NOT NULL,
+        quantity            REAL,
+        unit                TEXT,
+        unit_rate_mh        REAL,
+        labor_rate          REAL,
+        unit_price          REAL,
+        total_price         REAL,
+        cost_code           TEXT,
+        discipline          TEXT,
+        source              TEXT DEFAULT 'manual',
+        confidence          TEXT,
+        notes               TEXT,
+        sort_order          INTEGER DEFAULT 0,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bid_activity_sov_item ON bid_activity(bid_sov_item_id);
+    CREATE INDEX IF NOT EXISTS idx_bid_activity_cost_code ON bid_activity(cost_code);
+    """
+    conn.executescript(activity_sql)
+    conn.execute("UPDATE schema_version SET version = '1.6'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -491,6 +630,15 @@ def init_db(db_path: Path = None) -> None:
                 current = "1.2"
             if current == "1.2":
                 _migrate_1_2_to_1_3(conn)
+                current = "1.3"
+            if current == "1.3":
+                _migrate_1_3_to_1_4(conn)
+                current = "1.4"
+            if current == "1.4":
+                _migrate_1_4_to_1_5(conn)
+                current = "1.5"
+            if current == "1.5":
+                _migrate_1_5_to_1_6(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

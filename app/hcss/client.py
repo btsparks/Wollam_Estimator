@@ -57,13 +57,20 @@ class HCSSClient:
         self._auth = auth
         self._base_url = base_url.rstrip("/")
 
-    async def get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict:
+    async def get(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        _http: httpx.AsyncClient | None = None,
+    ) -> dict:
         """
         Authenticated GET request with retry logic.
 
         Args:
             endpoint: API path (e.g., '/api/v1/jobs').
             params: Query parameters.
+            _http: Optional pre-existing httpx client (used by get_paginated
+                   to reuse connections across pages).
 
         Returns:
             Parsed JSON response as dict.
@@ -84,26 +91,28 @@ class HCSSClient:
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                async with httpx.AsyncClient() as http:
-                    response = await http.get(
-                        url,
-                        params=params,
-                        headers=headers,
-                        timeout=DEFAULT_TIMEOUT,
+                if _http:
+                    response = await _http.get(
+                        url, params=params, headers=headers, timeout=DEFAULT_TIMEOUT,
                     )
-
-                    # Handle rate limiting — wait and retry
-                    if response.status_code == 429:
-                        retry_after = int(response.headers.get("Retry-After", "5"))
-                        logger.warning(
-                            "Rate limited on %s, waiting %d seconds",
-                            endpoint, retry_after,
+                else:
+                    async with httpx.AsyncClient() as http:
+                        response = await http.get(
+                            url, params=params, headers=headers, timeout=DEFAULT_TIMEOUT,
                         )
-                        await asyncio.sleep(retry_after)
-                        continue
 
-                    response.raise_for_status()
-                    return response.json()
+                # Handle rate limiting — wait and retry
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", "5"))
+                    logger.warning(
+                        "Rate limited on %s, waiting %d seconds",
+                        endpoint, retry_after,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+
+                response.raise_for_status()
+                return response.json()
 
             except httpx.HTTPStatusError as e:
                 last_error = e
@@ -158,35 +167,96 @@ class HCSSClient:
         skip = 0
         params = dict(params or {})
 
-        while True:
-            params["skip"] = skip
-            params["take"] = page_size
+        # Reuse one HTTP client for the entire pagination loop
+        async with httpx.AsyncClient() as http:
+            while True:
+                params["skip"] = skip
+                params["take"] = page_size
 
-            response = await self.get(endpoint, params=params)
+                response = await self.get(endpoint, params=params, _http=http)
 
-            # HCSS may return records in a 'data' key or as a direct list
-            if isinstance(response, list):
-                records = response
-            elif isinstance(response, dict) and "data" in response:
-                records = response["data"]
-            elif isinstance(response, dict) and "items" in response:
-                records = response["items"]
-            else:
-                # Single-page response or unknown format — return as-is
-                records = [response] if response else []
+                # HCSS returns records in various wrappers
+                if isinstance(response, list):
+                    records = response
+                elif isinstance(response, dict) and "results" in response:
+                    records = response["results"]
+                elif isinstance(response, dict) and "data" in response:
+                    records = response["data"]
+                elif isinstance(response, dict) and "items" in response:
+                    records = response["items"]
+                else:
+                    # Single-page response or unknown format — return as-is
+                    records = [response] if response else []
+                    all_records.extend(records)
+                    break
+
                 all_records.extend(records)
-                break
 
-            all_records.extend(records)
+                # If API returned more than we asked for, it ignores
+                # pagination — return everything from this single response
+                if len(records) > page_size:
+                    logger.info(
+                        "API returned %d records (> page_size %d) — not paginating, using full result",
+                        len(records), page_size,
+                    )
+                    break
 
-            # If we got fewer records than the page size, we've reached the end
-            if len(records) < page_size:
-                break
+                # If we got fewer records than the page size, we've reached the end
+                if len(records) < page_size:
+                    break
 
-            skip += page_size
-            logger.debug("Fetched %d records from %s, getting next page...", len(all_records), endpoint)
+                skip += page_size
+                logger.debug("Fetched %d records from %s, getting next page...", len(all_records), endpoint)
 
         logger.info("Fetched %d total records from %s", len(all_records), endpoint)
+        return all_records
+
+    async def get_cursor_paginated(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        page_size: int = DEFAULT_PAGE_SIZE,
+    ) -> list[dict]:
+        """
+        Cursor-based paginated GET — for endpoints using nextCursor pagination.
+
+        HCSS timeCardInfo and similar endpoints use:
+            {results: [...], metadata: {nextCursor: "xxx"}}
+        Pass nextCursor as ?cursor= to get next page.
+        """
+        all_records: list[dict] = []
+        params = dict(params or {})
+        params["take"] = page_size
+
+        async with httpx.AsyncClient() as http:
+            while True:
+                response = await self.get(endpoint, params=params, _http=http)
+
+                if isinstance(response, dict) and "results" in response:
+                    records = response["results"]
+                elif isinstance(response, list):
+                    records = response
+                else:
+                    records = [response] if response else []
+                    all_records.extend(records)
+                    break
+
+                all_records.extend(records)
+
+                # Check for next cursor in metadata
+                metadata = response.get("metadata", {}) if isinstance(response, dict) else {}
+                next_cursor = metadata.get("nextCursor")
+
+                if not next_cursor or len(records) < page_size:
+                    break
+
+                params["cursor"] = next_cursor
+                logger.debug(
+                    "Fetched %d records from %s, getting next page (cursor=%s)...",
+                    len(all_records), endpoint, next_cursor[:20],
+                )
+
+        logger.info("Fetched %d total records from %s (cursor pagination)", len(all_records), endpoint)
         return all_records
 
     async def post(self, endpoint: str, data: dict[str, Any] | None = None) -> dict:

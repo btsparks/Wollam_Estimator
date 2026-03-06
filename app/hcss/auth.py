@@ -57,8 +57,8 @@ class HCSSAuth:
             client_secret: HCSS OAuth client secret. Falls back to HCSS_CLIENT_SECRET env var.
             token_url: HCSS identity token endpoint.
         """
-        self._client_id = client_id or os.environ.get("HCSS_CLIENT_ID", "")
-        self._client_secret = client_secret or os.environ.get("HCSS_CLIENT_SECRET", "")
+        self._client_id = client_id if client_id is not None else os.environ.get("HCSS_CLIENT_ID", "")
+        self._client_secret = client_secret if client_secret is not None else os.environ.get("HCSS_CLIENT_SECRET", "")
         self._token_url = token_url
 
         # Cached token state
@@ -124,7 +124,7 @@ class HCSSAuth:
                     "grant_type": "client_credentials",
                     "client_id": self._client_id,
                     "client_secret": self._client_secret,
-                    "scope": "heavyjob heavybid-estimate-insights",
+                    "scope": "heavyjob:read timecards:read dis:read e360:read e360:timecards:read",
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=30.0,

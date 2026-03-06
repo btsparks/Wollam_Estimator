@@ -17,9 +17,6 @@ NAV_WORKFLOW = [
 NAV_KNOWLEDGE = [
     ("ask_weis", "Ask WEIS", "/ask-weis", "smart_toy"),
     ("job_intelligence", "Job Intelligence", "/job-intelligence", "insights"),
-    ("knowledge_base", "Knowledge Base", "/knowledge-base", "library_books"),
-    ("data_catalog", "Data Catalog", "/data-catalog", "folder_open"),
-    ("upload_jcd", "Upload JCD", "/upload-jcd", "upload_file"),
 ]
 
 

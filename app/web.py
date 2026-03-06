@@ -156,8 +156,6 @@ with st.sidebar:
                 if proj.get("total_actual_mh"):
                     mh = proj["total_actual_mh"]
                     st.markdown(f"- Manhours: {mh:,.0f}")
-                if proj.get("cpi"):
-                    st.markdown(f"- CPI: {proj['cpi']:.2f}")
 
     # --- Disciplines ---
     try:
@@ -228,7 +226,25 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 st.title("WEIS")
-st.caption("Wollam Estimating Intelligence System — Ask questions about historical job cost data")
+st.markdown("*Your estimating intelligence, built from your own job data.*")
+
+# Quick KB stats banner if knowledge base has data
+try:
+    from app.database import get_connection as _get_conn
+    _conn = _get_conn()
+    try:
+        _rl_count = _conn.execute("SELECT COUNT(*) as cnt FROM rate_library").fetchone()["cnt"]
+        _jobs_count = _conn.execute(
+            "SELECT COUNT(DISTINCT source_jobs) as cnt FROM rate_library WHERE source_jobs IS NOT NULL"
+        ).fetchone()["cnt"]
+        if _rl_count > 0:
+            st.info(f"**{_rl_count} rates** from **{_jobs_count} job(s)** ready to use — ask anything below or browse the Knowledge Base page.")
+    except Exception:
+        pass
+    finally:
+        _conn.close()
+except Exception:
+    pass
 
 # Check engine status
 engine = get_engine()

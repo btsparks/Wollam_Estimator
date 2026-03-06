@@ -222,7 +222,7 @@ TOOLS = [
     {
         "name": "get_project_summary",
         "description": (
-            "Get project-level summary data (total cost, MH, CPI, margin, dates). "
+            "Get project-level summary data (total cost, MH, margin, dates). "
             "Use this when the user asks about overall project performance, total cost, "
             "or general project information."
         ),
@@ -482,8 +482,6 @@ def _build_available_data() -> str:
         owner = proj.get("owner", "")
         cost = proj.get("total_actual_cost")
         mh = proj.get("total_actual_mh")
-        cpi = proj.get("cpi")
-
         header = f"- Job {job}: {name}"
         if owner:
             header += f" ({owner})"
@@ -494,8 +492,6 @@ def _build_available_data() -> str:
             details.append(f"${cost / 1_000_000:.1f}M actual cost")
         if mh:
             details.append(f"{mh:,.0f} MH")
-        if cpi:
-            details.append(f"CPI {cpi:.2f}")
         if details:
             lines.append(f"  - {', '.join(details)}")
 
@@ -793,3 +789,182 @@ class BidChatEngine:
     def reset(self):
         """Clear conversation history."""
         self.conversation = []
+
+
+# ---------------------------------------------------------------------------
+# Bid Item Scope Intelligence
+# ---------------------------------------------------------------------------
+
+SCOPE_ANALYSIS_PROMPT = """You are WEIS Scope Analyst for Wollam Construction (Utah-based industrial heavy civil contractor). You're analyzing bid documents to extract everything relevant to a specific bid item.
+
+## Bid Item
+- **Description:** {description}
+{item_number_line}
+
+## Your Task
+Analyze the bid document excerpts below and produce a comprehensive scope analysis for this bid item. Structure your response EXACTLY with these markdown headings:
+
+### Relevant Specifications
+List specific spec sections, requirements, and standards that apply to this bid item.
+
+### Drawing References
+List any drawing numbers, sheet references, or detail callouts mentioned.
+
+### Key Requirements
+Summarize the critical requirements: materials, methods, tolerances, testing, inspections.
+
+### Quantities & Measurements
+Extract any quantities, dimensions, areas, volumes, or measurements related to this work.
+
+### Exclusions & Clarifications
+Note anything explicitly excluded, any ambiguities that need RFI, or special conditions.
+
+### Risk Factors
+Flag anything that could impact cost or schedule: difficult access, phasing constraints, special materials, tight tolerances, etc.
+
+If certain sections have no relevant information from the documents, say "No specific references found in uploaded documents."
+
+Keep your analysis practical and concise — this is for estimators building a bid.
+
+## Document Excerpts
+{chunks_text}"""
+
+
+def _extract_search_keywords(description: str) -> list[str]:
+    """Extract search keywords from a bid item description."""
+    keywords = [description]
+
+    stop_words = {
+        "and", "or", "the", "of", "for", "in", "to", "a", "an",
+        "with", "at", "by", "on", "is", "are", "was", "all", "per",
+    }
+    words = [w.strip(",.()[]") for w in description.lower().split()]
+    meaningful = [w for w in words if w and w not in stop_words and len(w) > 2]
+
+    for word in meaningful:
+        if word not in [k.lower() for k in keywords]:
+            keywords.append(word)
+
+    return keywords[:6]
+
+
+def analyze_bid_item_scope(bid_id: int, description: str,
+                           item_number: str = None) -> str:
+    """Analyze bid documents for content relevant to a specific bid item.
+
+    Searches document chunks for keywords from the bid item description,
+    then sends relevant chunks to Claude for structured analysis.
+
+    Returns the analysis text (markdown formatted).
+    """
+    if not ANTHROPIC_API_KEY:
+        return "API key not configured. Set ANTHROPIC_API_KEY in your .env file."
+
+    # Search for relevant document chunks using multiple keywords
+    keywords = _extract_search_keywords(description)
+    all_chunks = []
+    seen_keys = set()
+
+    for kw in keywords:
+        results = query.search_bid_documents(kw, bid_id=bid_id, limit=10)
+        for chunk in results:
+            key = (chunk.get("filename", ""), chunk.get("chunk_index", 0))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                all_chunks.append(chunk)
+
+    if not all_chunks:
+        return (
+            f"No relevant document content found for **{description}**.\n\n"
+            "Make sure bid documents have been uploaded on the Active Bids page."
+        )
+
+    # Sort by document then chunk index for coherent reading
+    all_chunks.sort(key=lambda c: (c.get("filename", ""), c.get("chunk_index", 0)))
+
+    # Build chunks text (limit to ~15 chunks to stay within context)
+    chunks_text_parts = []
+    for chunk in all_chunks[:15]:
+        header = f"**[{chunk.get('filename', 'Unknown')}]**"
+        if chunk.get("section_heading"):
+            header += f" — {chunk['section_heading']}"
+        chunks_text_parts.append(f"{header}\n{chunk['chunk_text']}\n")
+
+    chunks_text = "\n---\n".join(chunks_text_parts)
+
+    item_number_line = f"- **Item Number:** #{item_number}" if item_number else ""
+
+    prompt = SCOPE_ANALYSIS_PROMPT.format(
+        description=description,
+        item_number_line=item_number_line,
+        chunks_text=chunks_text,
+    )
+
+    try:
+        client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text_parts = [b.text for b in response.content if hasattr(b, "text")]
+        return "\n".join(text_parts) if text_parts else "(No analysis generated)"
+    except Exception as e:
+        return f"Analysis failed: {e}"
+
+
+def ask_bid_item_question(bid_id: int, description: str, analysis: str,
+                          question: str, history: list[dict] = None) -> str:
+    """Ask a follow-up question about a specific bid item's scope.
+
+    Uses the previous analysis as context and searches for additional
+    document content based on the question.
+    """
+    if not ANTHROPIC_API_KEY:
+        return "API key not configured."
+
+    system = f"""You are WEIS Scope Analyst for Wollam Construction. You're answering follow-up questions about a specific bid item.
+
+## Bid Item
+{description}
+
+## Previous Scope Analysis
+{analysis}
+
+## Rules
+1. Answer based on the bid documents and analysis above.
+2. If you need to reference specific document content, cite the filename.
+3. Keep answers concise and actionable for estimators.
+4. If the analysis doesn't contain the answer, say so clearly."""
+
+    messages = list(history) if history else []
+
+    # Search for additional relevant chunks based on the question
+    chunks = query.search_bid_documents(question, bid_id=bid_id, limit=5)
+    extra_context = ""
+    if chunks:
+        parts = []
+        for chunk in chunks:
+            parts.append(
+                f"**[{chunk.get('filename', '')}]** "
+                f"{chunk.get('section_heading', '')}\n"
+                f"{chunk['chunk_text'][:500]}"
+            )
+        extra_context = (
+            "\n\n---\nAdditional document context:\n" + "\n\n".join(parts)
+        )
+
+    messages.append({"role": "user", "content": question + extra_context})
+
+    try:
+        client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            system=system,
+            messages=messages,
+        )
+        text_parts = [b.text for b in response.content if hasattr(b, "text")]
+        return "\n".join(text_parts) if text_parts else "(No response)"
+    except Exception as e:
+        return f"Error: {e}"

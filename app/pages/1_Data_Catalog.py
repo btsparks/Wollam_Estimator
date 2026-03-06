@@ -69,8 +69,6 @@ else:
                 fin_cols[0].metric("Actual Cost", f"${proj['total_actual_cost']:,.0f}")
                 if proj.get("total_actual_mh"):
                     fin_cols[1].metric("Actual MH", f"{proj['total_actual_mh']:,.0f}")
-                if proj.get("cpi"):
-                    fin_cols[2].metric("CPI", f"{proj['cpi']:.2f}")
                 if proj.get("total_budget_cost"):
                     fin_cols[3].metric("Budget Cost", f"${proj['total_budget_cost']:,.0f}")
 

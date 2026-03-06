@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 # ─────────────────────────────────────────────────────────────
@@ -43,58 +43,94 @@ class HJJob(BaseModel):
     """
     HeavyJob job record.
 
-    Represents a single construction project. 'Active' jobs are in progress,
-    'Closed' jobs are complete and ready for rate card generation.
+    Represents a single construction project. Real API field names used.
+    Status values from API: 'active', 'inactive', 'completed'.
     """
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: Optional[str] = None                   # HCSS UUID
-    jobNumber: Optional[str] = None            # e.g., '8553'
+    code: Optional[str] = Field(None, alias="jobNumber")  # Job number, e.g., '8553'
     description: Optional[str] = None          # e.g., 'RTK SPD Pump Station'
-    status: Optional[str] = None               # 'Active', 'Closed', 'Pending'
-    startDate: Optional[date] = None
-    endDate: Optional[date] = None
+    status: Optional[str] = None               # 'active', 'inactive', 'completed'
+    createdDate: Optional[str] = None          # ISO datetime string
     businessUnitId: Optional[str] = None
+    legacyId: Optional[str] = None
+    isDeleted: Optional[bool] = None
+    payItemSetupType: Optional[str] = None
+    relatedEstimateCodes: Optional[list[str]] = None
 
-    # Contract fields — not always present in API response
-    ownerClient: Optional[str] = None
-    contractType: Optional[str] = None
-    projectType: Optional[str] = None
-    location: Optional[str] = None
+    # Convenience alias for downstream code that uses jobNumber
+    @property
+    def jobNumber(self) -> str | None:
+        return self.code
 
     _strip_description = field_validator("description", mode="before")(_strip_str)
-    _strip_job_number = field_validator("jobNumber", mode="before")(_strip_str)
+    _strip_code = field_validator("code", mode="before")(_strip_str)
 
 
 class HJCostCode(BaseModel):
     """
-    HeavyJob cost code with budget and actual values.
+    HeavyJob cost code with budget values.
 
-    This is the fundamental data unit for rate calculation. Each cost code
-    represents a specific activity (e.g., '2215' = wall form/strip) with
-    both budget (estimated) and actual (field-reported) hours, costs, and quantities.
+    Real API returns a single set of hours/dollars per cost code — these are
+    budget values from the estimate. Actual values come from timecard aggregation.
 
-    The delta between budget and actual is where the estimating intelligence lives.
+    Fields match the HCSS HeavyJob /api/v1/costCodes endpoint response.
     """
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    # AliasChoices lets us accept BOTH HCSS API field names AND mock/legacy names.
+    # With populate_by_name=True, the field name itself also works.
 
     id: Optional[str] = None                   # HCSS UUID
     jobId: Optional[str] = None
+    jobCode: Optional[str] = None              # Denormalized job number
     code: Optional[str] = None                 # e.g., '2215'
     description: Optional[str] = None          # e.g., 'C_F/S Walls'
-    unit: Optional[str] = None                 # 'SF', 'CY', 'LF', 'EA', 'LS'
+    unitOfMeasure: Optional[str] = Field(
+        None, validation_alias=AliasChoices("unitOfMeasure", "unit"),
+    )
+    status: Optional[str] = None               # 'active', 'completed'
+    quantity: Optional[float] = Field(
+        None, validation_alias=AliasChoices("quantity", "budgetQuantity"),
+    )
 
-    # Budget values (what was estimated)
-    budgetQuantity: Optional[float] = None
-    budgetLaborHours: Optional[float] = None
-    budgetLaborCost: Optional[float] = None
-    budgetEquipmentHours: Optional[float] = None
-    budgetEquipmentCost: Optional[float] = None
-    budgetMaterialCost: Optional[float] = None
-    budgetSubcontractCost: Optional[float] = None
-    budgetTotalCost: Optional[float] = None
+    # Budget values (from estimate)
+    laborHours: Optional[float] = Field(
+        None, validation_alias=AliasChoices("laborHours", "budgetLaborHours"),
+    )
+    equipmentHours: Optional[float] = Field(
+        None, validation_alias=AliasChoices("equipmentHours", "budgetEquipmentHours"),
+    )
+    laborDollars: Optional[float] = Field(
+        None, validation_alias=AliasChoices("laborDollars", "budgetLaborCost"),
+    )
+    equipmentDollars: Optional[float] = Field(
+        None, validation_alias=AliasChoices("equipmentDollars", "budgetEquipmentCost"),
+    )
+    materialDollars: Optional[float] = Field(
+        None, validation_alias=AliasChoices("materialDollars", "budgetMaterialCost"),
+    )
+    subcontractDollars: Optional[float] = Field(
+        None, validation_alias=AliasChoices("subcontractDollars", "budgetSubcontractCost"),
+    )
+    customCostTypeDollars: Optional[list] = None
+    budgetTotalCostRaw: Optional[float] = Field(
+        None, validation_alias="budgetTotalCost", exclude=True,
+    )
 
-    # Actual values (what happened in the field)
+    # Metadata
+    businessUnitId: Optional[str] = None
+    businessUnitCode: Optional[str] = None
+    historicalActivityCode: Optional[str] = None
+    historicalBiditem: Optional[str] = None
+    heavyBidEstimateCode: Optional[str] = None
+    isDeleted: Optional[bool] = None
+    isCapExpected: Optional[bool] = None
+    isTm: Optional[bool] = None
+
+    # Actual values — NOT populated by the HCSS costCodes endpoint.
+    # Populated from timecard aggregation, file imports, or test fixtures.
     actualQuantity: Optional[float] = None
     actualLaborHours: Optional[float] = None
     actualLaborCost: Optional[float] = None
@@ -102,33 +138,87 @@ class HJCostCode(BaseModel):
     actualEquipmentCost: Optional[float] = None
     actualMaterialCost: Optional[float] = None
     actualSubcontractCost: Optional[float] = None
-    actualTotalCost: Optional[float] = None
-
-    # Progress (0-100, from foreman daily reporting)
+    actualTotalCostRaw: Optional[float] = Field(
+        None, validation_alias="actualTotalCost", exclude=True,
+    )
     percentComplete: Optional[float] = None
+
+    # Convenience aliases for downstream code
+    @property
+    def unit(self) -> str | None:
+        return self.unitOfMeasure
+
+    @property
+    def budgetQuantity(self) -> float | None:
+        return self.quantity
+
+    @property
+    def budgetLaborHours(self) -> float | None:
+        return self.laborHours
+
+    @property
+    def budgetLaborCost(self) -> float | None:
+        return self.laborDollars
+
+    @property
+    def budgetEquipmentHours(self) -> float | None:
+        return self.equipmentHours
+
+    @property
+    def budgetEquipmentCost(self) -> float | None:
+        return self.equipmentDollars
+
+    @property
+    def budgetMaterialCost(self) -> float | None:
+        return self.materialDollars
+
+    @property
+    def budgetSubcontractCost(self) -> float | None:
+        return self.subcontractDollars
+
+    @property
+    def budgetTotalCost(self) -> float | None:
+        # Prefer explicit total from data source (may include costs not broken into components)
+        if self.budgetTotalCostRaw is not None:
+            return self.budgetTotalCostRaw
+        parts = [self.laborDollars, self.equipmentDollars,
+                 self.materialDollars, self.subcontractDollars]
+        vals = [p for p in parts if p is not None]
+        return sum(vals) if vals else None
+
+    @property
+    def actualTotalCost(self) -> float | None:
+        # Prefer explicit total from data source (may include costs not broken into components)
+        if self.actualTotalCostRaw is not None:
+            return self.actualTotalCostRaw
+        parts = [self.actualLaborCost, self.actualEquipmentCost,
+                 self.actualMaterialCost, self.actualSubcontractCost]
+        vals = [p for p in parts if p is not None]
+        return sum(vals) if vals else None
 
     _strip_code = field_validator("code", mode="before")(_strip_str)
     _strip_description = field_validator("description", mode="before")(_strip_str)
-    _strip_unit = field_validator("unit", mode="before")(_strip_str)
+    _strip_unit = field_validator("unitOfMeasure", mode="before")(_strip_str)
 
 
 class HJTimeCard(BaseModel):
     """
-    HeavyJob time card entry.
+    HeavyJob time card entry (flattened).
 
-    Daily record of who worked, how many hours, on what cost code.
-    Used for crew analysis and production rate calculation.
+    One row = one employee's hours on one cost code for one day.
+    Flattened from the nested API response (timecard -> employees -> hours -> cost codes).
+    Used for actual MH/unit calculation and crew analysis.
     """
     model_config = ConfigDict(from_attributes=True)
 
-    id: Optional[str] = None
+    id: Optional[str] = None                   # HCSS timecard UUID
     jobId: Optional[str] = None
-    costCodeId: Optional[str] = None
+    costCodeId: Optional[str] = None           # HCSS cost code UUID
     costCode: Optional[str] = None             # Denormalized code string
-    date: Optional[date] = None
+    tc_date: Optional[str] = None              # ISO date string (YYYY-MM-DD)
     employeeId: Optional[str] = None
     employeeName: Optional[str] = None
-    hours: Optional[float] = None
+    hours: Optional[float] = None              # Total hours (regular + OT + DOT)
     equipmentId: Optional[str] = None
     equipmentHours: Optional[float] = None
     foremanId: Optional[str] = None
@@ -382,7 +472,6 @@ class RateCard(BaseModel):
     # Summary metrics
     total_budget: float | None = None
     total_actual: float | None = None
-    cpi: float | None = None                   # Cost Performance Index (budget / actual)
 
     # Status
     status: str = "draft"                      # 'draft', 'pending_review', 'approved'

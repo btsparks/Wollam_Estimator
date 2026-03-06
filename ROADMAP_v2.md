@@ -15,14 +15,14 @@ Every phase must be fully functional and delivering real value before the next p
 
 | Phase | Name | Core Deliverable | Duration | Status |
 |-------|------|-----------------|----------|--------|
-| A | Architecture & Schema | Database v2.0, API client framework, transformation layer | 1-2 weeks | 🔄 Current |
-| B | Mock Data & Validation | Mock HCSS data from JCDs, validate transformation logic | 1-2 weeks | 🔲 Next |
+| A | Architecture & Schema | Database v2.0, API client framework, transformation layer | 1-2 weeks | ✅ Complete |
+| B | Mock Data & Validation | Mock HCSS data from JCDs, validate transformation logic | 1-2 weeks | ✅ Complete |
 | C | API Connection | Live HCSS API, real data extraction | When credentials arrive | 🔲 Blocked |
 | D | Full Integration | Sync orchestration, PM interview UI, agent integration | 1-2 weeks after C | 🔲 Planned |
 
 ---
 
-## Phase A — Architecture & Schema (NOW)
+## Phase A — Architecture & Schema ✅
 
 **Goal:** Build the complete framework without live API. Everything compiles, everything has a test harness, and the data model is proven.
 
@@ -30,66 +30,68 @@ Every phase must be fully functional and delivering real value before the next p
 
 | Task | File | Status |
 |------|------|--------|
-| Define database schema v2.0 | `scripts/migrate_v2.py` | 🔲 Not Started |
-| Create Pydantic models for API responses | `app/hcss/models.py` | 🔲 Not Started |
-| Build base API client (auth, pagination, retry) | `app/hcss/client.py` | 🔲 Not Started |
-| Build HeavyJob API wrapper | `app/hcss/heavyjob.py` | 🔲 Not Started |
-| Build HeavyBid API wrapper | `app/hcss/heavybid.py` | 🔲 Not Started |
-| Create discipline mapper (configurable) | `app/transform/mapper.py` | 🔲 Not Started |
-| Create unit cost calculator | `app/transform/calculator.py` | 🔲 Not Started |
-| Create rate card generator | `app/transform/rate_card.py` | 🔲 Not Started |
-| Create data validator | `app/transform/validator.py` | 🔲 Not Started |
-| Write discipline mapping config | `config/discipline_map.yaml` | 🔲 Not Started |
-| Write HCSS config template | `config/hcss_config.yaml` | 🔲 Not Started |
-| Write rate threshold config | `config/rate_thresholds.yaml` | 🔲 Not Started |
+| Define database schema v2.0 | `scripts/migrate_v2.py` | ✅ Complete |
+| Create Pydantic models for API responses | `app/hcss/models.py` | ✅ Complete |
+| Build base API client (auth, pagination, retry) | `app/hcss/client.py` | ✅ Complete |
+| Build HeavyJob API wrapper | `app/hcss/heavyjob.py` | ✅ Complete |
+| Build HeavyBid API wrapper | `app/hcss/heavybid.py` | ✅ Complete |
+| Create discipline mapper (configurable) | `app/transform/mapper.py` | ✅ Complete |
+| Create unit cost calculator | `app/transform/calculator.py` | ✅ Complete |
+| Create rate card generator | `app/transform/rate_card.py` | ✅ Complete |
+| Create data validator | `app/transform/validator.py` | ✅ Complete |
+| Write discipline mapping config | `config/discipline_map.yaml` | ✅ Complete |
+| Write HCSS config template | `config/hcss_config.yaml` | ✅ Complete |
+| Write rate threshold config | `config/rate_thresholds.yaml` | ✅ Complete |
 
 ### Definition of Done
-- [ ] All modules created with complete function signatures
-- [ ] Database schema v2.0 tables created alongside v1.3
-- [ ] Unit cost calculator passes basic arithmetic tests
-- [ ] Discipline mapper correctly classifies all known Wollam cost code prefixes
-- [ ] Configuration files documented and validated
+- [x] All modules created with complete function signatures
+- [x] Database schema v2.0 tables created alongside v1.3
+- [x] Unit cost calculator passes basic arithmetic tests
+- [x] Discipline mapper correctly classifies all known Wollam cost code prefixes
+- [x] Configuration files documented and validated
 
 ---
 
-## Phase B — Mock Data & Validation (1-2 weeks)
+## Phase B — Mock Data & Validation ✅
 
 **Goal:** Validate that the transformation logic produces the same rates as the manually-created JCDs. This is the proof point — if API-driven rate cards match manual JCDs, the system works.
+
+**Note:** Phase B validates pipeline math correctness. JCDs are curated intelligence products (PM interviews, crew observations, estimating judgment) — NOT equivalent to raw HeavyJob/HeavyBid API output. Future Phase C+ validation should compare against raw API data, not JCD rates.
 
 ### Deliverables
 
 | Task | File | Status |
 |------|------|--------|
-| Create mock HJ data from Job 8553 JCDs | `tests/mock_data/heavyjob/` | 🔲 Not Started |
-| Create mock HJ data from Job 8576 JCDs | `tests/mock_data/heavyjob/` | 🔲 Not Started |
-| Create mock HB data from proposal docs | `tests/mock_data/heavybid/` | 🔲 Not Started |
-| Write validation tests vs 8553 rates | `tests/test_rate_calculation.py` | 🔲 Not Started |
-| Write validation tests vs 8576 rates | `tests/test_rate_calculation.py` | 🔲 Not Started |
-| Test discipline mapper against all cost codes | `tests/test_transform.py` | 🔲 Not Started |
-| Test rate card generation end-to-end | `tests/test_rate_card.py` | 🔲 Not Started |
-| Fix transformation bugs | Working code | 🔲 Not Started |
+| Create mock HJ data from Job 8553 JCDs | `tests/mock_data/heavyjob/costcodes_8553.json` | ✅ Complete |
+| Create mock HJ data from Job 8576 JCDs | `tests/mock_data/heavyjob/costcodes_8576.json` | ✅ Complete |
+| Create mock HB data from proposal docs | `tests/mock_data/heavybid/` | ✅ Complete |
+| Write validation tests vs 8553 rates | `tests/test_phase_b_validation.py` | ✅ Complete |
+| Write validation tests vs 8576 rates | `tests/test_phase_b_validation.py` | ✅ Complete |
+| Test discipline mapper against all cost codes | `tests/test_transform.py` | ✅ Complete |
+| Test rate card generation end-to-end | `tests/test_phase_b_validation.py` | ✅ Complete |
+| Fix transformation bugs | Working code | ✅ Complete |
 
-### Validation Criteria (Key Rates Must Match)
+### Validation Criteria (All 10/10 Passing ✅)
 
-| Activity | Source | Expected Rate | Tolerance |
-|----------|--------|---------------|-----------|
-| Wall Form/Strip | 8553 | 0.28 MH/SF | ±0.02 |
-| Wall Form/Strip | 8576 | 0.20 MH/SF | ±0.02 |
-| Mat Pour | 8553 | 0.15 MH/CY | ±0.02 |
-| Pour Floor | 8576 | 0.67 MH/CY | ±0.05 |
-| All-In Concrete | 8553 | $867/CY | ±$50 |
-| All-In Concrete | 8576 | $965/CY | ±$50 |
-| Flanged Joint 20-28" | 8553 | 7 MH/JT | ±0.5 |
-| SS Pipe EX/BF | 8576 | $3.08/CY | ±$0.25 |
-| SS Pipe All-In | 8576 | $169/LF | ±$10 |
-| GC % | 8576 | 15.0% | ±1.0% |
+| Activity | Source | Expected Rate | Tolerance | Result |
+|----------|--------|---------------|-----------|--------|
+| Wall Form/Strip | 8553 | 0.28 MH/SF | ±0.02 | ✅ |
+| Wall Form/Strip | 8576 | 0.20 MH/SF | ±0.02 | ✅ |
+| Mat Pour | 8553 | 0.15 MH/CY | ±0.02 | ✅ |
+| Pour Floor | 8576 | 0.67 MH/CY | ±0.05 | ✅ |
+| All-In Concrete | 8553 | $867/CY | ±$50 | ✅ |
+| All-In Concrete | 8576 | $965/CY | ±$50 | ✅ |
+| Flanged Joint 20-28" | 8553 | 7 MH/JT | ±0.5 | ✅ |
+| SS Pipe EX/BF | 8576 | $3.08/CY | ±$0.25 | ✅ |
+| SS Pipe All-In | 8576 | $169/LF | ±$10 | ✅ |
+| GC % | 8576 | 15.0% | ±1.0% | ✅ |
 
 ### Definition of Done
-- [ ] Mock data created for both jobs
-- [ ] All key validation rates match within tolerance
-- [ ] Rate card generation produces complete output for both jobs
-- [ ] No unhandled errors in transformation pipeline
-- [ ] Test suite runs green
+- [x] Mock data created for both jobs
+- [x] All key validation rates match within tolerance
+- [x] Rate card generation produces complete output for both jobs
+- [x] No unhandled errors in transformation pipeline
+- [x] Test suite runs green (111/111 passing)
 
 ---
 

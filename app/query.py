@@ -835,7 +835,7 @@ def get_database_overview() -> dict:
 
         # Projects
         projects = conn.execute(
-            "SELECT job_number, job_name, owner, total_actual_cost, total_actual_mh, cpi "
+            "SELECT job_number, job_name, owner, total_actual_cost, total_actual_mh "
             "FROM projects"
         ).fetchall()
         overview["projects"] = _rows_to_dicts(projects)
@@ -1244,6 +1244,591 @@ def get_report_diff(bid_id: int, agent_name: str, new_report: dict) -> dict | No
         "packages_added": max(0, new_packages - old_packages),
         "packages_removed": max(0, old_packages - new_packages),
         "summary": " | ".join(changes) if changes else "No significant changes",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Bid SOV Items (Phase 4 — Schedule of Values)
+# ---------------------------------------------------------------------------
+
+
+def get_sov_items(bid_id: int) -> list[dict]:
+    """Get all SOV line items for a bid, ordered by sort_order."""
+    conn = get_connection()
+    try:
+        return _rows_to_dicts(conn.execute(
+            "SELECT * FROM bid_sov_item WHERE bid_id = ? ORDER BY sort_order, id",
+            (bid_id,),
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+def insert_sov_item(bid_id: int, item_number: str = None,
+                    description: str = "", quantity: float = None,
+                    unit: str = None, owner_amount: float = None,
+                    cost_code: str = None, discipline: str = None,
+                    notes: str = None, sort_order: int = 0) -> int:
+    """Insert a new SOV line item. Returns the new item ID."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """INSERT INTO bid_sov_item
+               (bid_id, item_number, description, quantity, unit, owner_amount,
+                cost_code, discipline, notes, sort_order)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (bid_id, item_number, description, quantity, unit, owner_amount,
+             cost_code, discipline, notes, sort_order),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def update_sov_item(item_id: int, **kwargs) -> bool:
+    """Update an SOV item. Pass any column=value pairs. Returns True if updated."""
+    allowed = {
+        "item_number", "description", "quantity", "unit", "owner_amount",
+        "cost_code", "discipline", "mapped_by", "unit_price", "total_price",
+        "rate_source", "rate_confidence", "notes", "sort_order",
+        "pm_quantity", "pm_unit", "quantity_status", "quantity_notes",
+        "quantity_verified_at",
+    }
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return False
+
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [item_id]
+
+    conn = get_connection()
+    try:
+        conn.execute(
+            f"UPDATE bid_sov_item SET {sets}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            vals,
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def delete_sov_item(item_id: int) -> bool:
+    """Delete an SOV item. Returns True if deleted."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute("DELETE FROM bid_sov_item WHERE id = ?", (item_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_all_sov_items(bid_id: int) -> int:
+    """Delete all SOV items for a bid. Returns count deleted."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute("DELETE FROM bid_sov_item WHERE bid_id = ?", (bid_id,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def get_sov_summary(bid_id: int) -> dict:
+    """Get SOV summary stats for a bid."""
+    conn = get_connection()
+    try:
+        items = _rows_to_dicts(conn.execute(
+            "SELECT * FROM bid_sov_item WHERE bid_id = ? ORDER BY sort_order, id",
+            (bid_id,),
+        ).fetchall())
+
+        total = len(items)
+        mapped = sum(1 for i in items if i.get("cost_code"))
+        unmapped = total - mapped
+        bid_total = sum(i["total_price"] or 0 for i in items)
+        disciplines = sorted(set(
+            i["discipline"] for i in items
+            if i.get("discipline")
+        ))
+
+        return {
+            "total_items": total,
+            "mapped": mapped,
+            "unmapped": unmapped,
+            "bid_total": bid_total,
+            "disciplines": disciplines,
+        }
+    finally:
+        conn.close()
+
+
+def get_available_cost_codes() -> list[dict]:
+    """Get known cost codes from rate_library for mapping suggestions."""
+    conn = get_connection()
+    try:
+        return _rows_to_dicts(conn.execute(
+            """SELECT DISTINCT discipline, activity as cost_code, description,
+                      rate, unit, confidence
+               FROM rate_library
+               ORDER BY discipline, activity"""
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+def update_pm_quantity(item_id: int, pm_quantity: float | None,
+                       pm_unit: str | None = None,
+                       quantity_status: str = "verified",
+                       quantity_notes: str | None = None) -> bool:
+    """Update PM-verified quantity for an SOV item."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """UPDATE bid_sov_item
+               SET pm_quantity = ?, pm_unit = ?, quantity_status = ?,
+                   quantity_notes = ?, quantity_verified_at = CURRENT_TIMESTAMP,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (pm_quantity, pm_unit, quantity_status, quantity_notes, item_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def get_quantity_register(bid_id: int) -> list[dict]:
+    """Get quantity register data for a bid — owner vs PM quantities with variance."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT id, item_number, description, quantity, unit, owner_amount,
+                      cost_code, discipline, pm_quantity, pm_unit,
+                      quantity_status, quantity_notes, quantity_verified_at
+               FROM bid_sov_item
+               WHERE bid_id = ?
+               ORDER BY sort_order, id""",
+            (bid_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            owner_q = d["quantity"]
+            pm_q = d["pm_quantity"]
+            if owner_q and pm_q:
+                d["variance"] = pm_q - owner_q
+                d["variance_pct"] = ((pm_q - owner_q) / owner_q * 100) if owner_q else 0
+            else:
+                d["variance"] = None
+                d["variance_pct"] = None
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+def get_quantity_summary(bid_id: int) -> dict:
+    """Get quantity register summary stats."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT
+                COUNT(*) as total_items,
+                SUM(CASE WHEN quantity_status = 'verified' THEN 1 ELSE 0 END) as verified,
+                SUM(CASE WHEN quantity_status = 'flagged' THEN 1 ELSE 0 END) as flagged,
+                SUM(CASE WHEN quantity_status = 'accepted' THEN 1 ELSE 0 END) as accepted,
+                SUM(CASE WHEN quantity_status = 'pending' OR quantity_status IS NULL
+                    THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN pm_quantity IS NOT NULL THEN 1 ELSE 0 END) as has_pm_qty
+               FROM bid_sov_item WHERE bid_id = ?""",
+            (bid_id,),
+        ).fetchone()
+        return dict(row) if row else {
+            "total_items": 0, "verified": 0, "flagged": 0,
+            "accepted": 0, "pending": 0, "has_pm_qty": 0,
+        }
+    finally:
+        conn.close()
+
+
+def get_rate_application_data(bid_id: int, labor_rate: float = 85.0) -> list[dict]:
+    """Get SOV items with matched KB rates and calculated pricing.
+
+    labor_rate: blended $/MH used to convert MH-based rates to dollar amounts.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT s.id, s.item_number, s.description, s.quantity, s.unit,
+                      s.owner_amount, s.cost_code, s.discipline,
+                      s.unit_price, s.total_price, s.rate_source, s.rate_confidence,
+                      s.pm_quantity,
+                      r.rate as kb_rate, r.unit as kb_unit, r.confidence as kb_confidence,
+                      r.description as kb_description, r.rate_type as kb_rate_type,
+                      r.source_jobs as kb_source_jobs
+               FROM bid_sov_item s
+               LEFT JOIN rate_library r ON s.cost_code = r.activity
+               WHERE s.bid_id = ?
+               ORDER BY s.sort_order, s.id""",
+            (bid_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            kb_rate = d.get("kb_rate")
+            qty = d.get("pm_quantity") or d.get("quantity")
+            if kb_rate and qty:
+                d["est_mh"] = round(kb_rate * qty, 1)
+                d["est_unit_price"] = round(kb_rate * labor_rate, 2)
+                d["est_total"] = round(kb_rate * qty * labor_rate, 0)
+            else:
+                d["est_mh"] = None
+                d["est_unit_price"] = None
+                d["est_total"] = None
+            # Owner vs estimate delta
+            if d.get("est_total") and d.get("owner_amount"):
+                d["delta"] = d["est_total"] - d["owner_amount"]
+                d["delta_pct"] = round(
+                    (d["est_total"] - d["owner_amount"]) / d["owner_amount"] * 100, 1
+                )
+            else:
+                d["delta"] = None
+                d["delta_pct"] = None
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+def apply_rate_to_item(item_id: int, unit_price: float, total_price: float,
+                       rate_source: str, rate_confidence: str) -> bool:
+    """Apply a calculated rate to an SOV item."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """UPDATE bid_sov_item
+               SET unit_price = ?, total_price = ?, rate_source = ?,
+                   rate_confidence = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (unit_price, total_price, rate_source, rate_confidence, item_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def apply_all_rates(bid_id: int, labor_rate: float = 85.0) -> int:
+    """Apply KB rates to all mapped SOV items. Returns count of items updated."""
+    items = get_rate_application_data(bid_id, labor_rate)
+    count = 0
+    for item in items:
+        if item.get("est_unit_price") and item.get("est_total"):
+            source = f"KB rate {item['cost_code']} from Job {item.get('kb_source_jobs', '?')}"
+            apply_rate_to_item(
+                item["id"], item["est_unit_price"], item["est_total"],
+                source, item.get("kb_confidence") or "limited",
+            )
+            count += 1
+    return count
+
+
+def get_rate_application_summary(bid_id: int, labor_rate: float = 85.0) -> dict:
+    """Get summary stats for rate application."""
+    items = get_rate_application_data(bid_id, labor_rate)
+    total = len(items)
+    has_rate = sum(1 for i in items if i.get("kb_rate"))
+    applied = sum(1 for i in items if i.get("total_price"))
+    est_total = sum(i.get("est_total") or 0 for i in items)
+    owner_total = sum(i.get("owner_amount") or 0 for i in items)
+    return {
+        "total_items": total,
+        "has_kb_rate": has_rate,
+        "rates_applied": applied,
+        "est_total": est_total,
+        "owner_total": owner_total,
+        "delta": est_total - owner_total if est_total and owner_total else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Bid Activities (Phase 4b — Activity-level estimating)
+# ---------------------------------------------------------------------------
+
+
+def insert_activity(bid_sov_item_id: int, description: str = "",
+                    activity_number: str = None, quantity: float = None,
+                    unit: str = None, unit_rate_mh: float = None,
+                    labor_rate: float = None, cost_code: str = None,
+                    discipline: str = None, source: str = "manual",
+                    confidence: str = None, notes: str = None,
+                    sort_order: int = 0) -> int:
+    """Insert a new activity under a SOV item. Returns the new activity ID."""
+    conn = get_connection()
+    try:
+        # Calculate prices if we have rate + qty + labor
+        unit_price = None
+        total_price = None
+        if unit_rate_mh and labor_rate:
+            unit_price = round(unit_rate_mh * labor_rate, 2)
+            if quantity:
+                total_price = round(unit_rate_mh * quantity * labor_rate, 2)
+
+        cursor = conn.execute(
+            """INSERT INTO bid_activity
+               (bid_sov_item_id, activity_number, description, quantity, unit,
+                unit_rate_mh, labor_rate, unit_price, total_price,
+                cost_code, discipline, source, confidence, notes, sort_order)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (bid_sov_item_id, activity_number, description, quantity, unit,
+             unit_rate_mh, labor_rate, unit_price, total_price,
+             cost_code, discipline, source, confidence, notes, sort_order),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def update_activity(activity_id: int, **kwargs) -> bool:
+    """Update an activity. Pass any column=value pairs. Returns True if updated."""
+    allowed = {
+        "activity_number", "description", "quantity", "unit",
+        "unit_rate_mh", "labor_rate", "unit_price", "total_price",
+        "cost_code", "discipline", "source", "confidence", "notes", "sort_order",
+    }
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return False
+
+    # Recalculate prices if rate components changed
+    if any(k in fields for k in ("unit_rate_mh", "labor_rate", "quantity")):
+        # Need current values to fill in what's not being updated
+        conn = get_connection()
+        try:
+            cur = conn.execute("SELECT * FROM bid_activity WHERE id = ?", (activity_id,))
+            row = cur.fetchone()
+            if row:
+                current = dict(row)
+                rate = fields.get("unit_rate_mh", current["unit_rate_mh"])
+                lr = fields.get("labor_rate", current["labor_rate"])
+                qty = fields.get("quantity", current["quantity"])
+                if rate and lr:
+                    fields["unit_price"] = round(rate * lr, 2)
+                    if qty:
+                        fields["total_price"] = round(rate * qty * lr, 2)
+        finally:
+            conn.close()
+
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    vals = list(fields.values()) + [activity_id]
+
+    conn = get_connection()
+    try:
+        conn.execute(
+            f"UPDATE bid_activity SET {sets}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            vals,
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def delete_activity(activity_id: int) -> bool:
+    """Delete an activity. Returns True if deleted."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute("DELETE FROM bid_activity WHERE id = ?", (activity_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_activities_for_item(bid_sov_item_id: int) -> list[dict]:
+    """Get all activities under a SOV item, ordered by sort_order."""
+    conn = get_connection()
+    try:
+        return _rows_to_dicts(conn.execute(
+            "SELECT * FROM bid_activity WHERE bid_sov_item_id = ? ORDER BY sort_order, id",
+            (bid_sov_item_id,),
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+def get_activities_for_bid(bid_id: int) -> list[dict]:
+    """Get all activities for a bid (across all SOV items), with parent item info."""
+    conn = get_connection()
+    try:
+        return _rows_to_dicts(conn.execute(
+            """SELECT a.*, s.item_number as parent_item_number,
+                      s.description as parent_description,
+                      s.quantity as parent_quantity, s.unit as parent_unit
+               FROM bid_activity a
+               JOIN bid_sov_item s ON a.bid_sov_item_id = s.id
+               WHERE s.bid_id = ?
+               ORDER BY s.sort_order, s.id, a.sort_order, a.id""",
+            (bid_id,),
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+def get_activity_summary_for_item(bid_sov_item_id: int) -> dict:
+    """Get summary of activities under a SOV item."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT
+                COUNT(*) as activity_count,
+                SUM(total_price) as total_price,
+                SUM(CASE WHEN unit_rate_mh IS NOT NULL THEN quantity * unit_rate_mh ELSE 0 END) as total_mh
+               FROM bid_activity WHERE bid_sov_item_id = ?""",
+            (bid_sov_item_id,),
+        ).fetchone()
+        return dict(row) if row else {"activity_count": 0, "total_price": None, "total_mh": 0}
+    finally:
+        conn.close()
+
+
+def get_bid_activity_rollup(bid_id: int) -> dict:
+    """Roll up all activities across all SOV items for a bid."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT
+                COUNT(a.id) as total_activities,
+                COUNT(DISTINCT a.bid_sov_item_id) as items_with_activities,
+                SUM(a.total_price) as grand_total,
+                SUM(CASE WHEN a.unit_rate_mh IS NOT NULL
+                    THEN a.quantity * a.unit_rate_mh ELSE 0 END) as total_mh,
+                SUM(CASE WHEN a.cost_code IS NOT NULL THEN 1 ELSE 0 END) as coded_activities
+               FROM bid_activity a
+               JOIN bid_sov_item s ON a.bid_sov_item_id = s.id
+               WHERE s.bid_id = ?""",
+            (bid_id,),
+        ).fetchone()
+        return dict(row) if row else {
+            "total_activities": 0, "items_with_activities": 0,
+            "grand_total": None, "total_mh": 0, "coded_activities": 0,
+        }
+    finally:
+        conn.close()
+
+
+def delete_activities_for_item(bid_sov_item_id: int) -> int:
+    """Delete all activities for a SOV item. Returns count deleted."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM bid_activity WHERE bid_sov_item_id = ?", (bid_sov_item_id,),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def get_activity_rate_data(bid_id: int, labor_rate: float = 85.0) -> list[dict]:
+    """Get activities with matched KB rates for the Rate Application page.
+
+    Joins activities to rate_library via cost_code. Calculates estimated
+    MH, unit price, and total for activities missing rates.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT a.id, a.bid_sov_item_id, a.activity_number, a.description,
+                      a.quantity, a.unit, a.unit_rate_mh, a.labor_rate,
+                      a.unit_price, a.total_price, a.cost_code, a.discipline,
+                      a.source, a.confidence, a.notes,
+                      s.item_number as parent_item_number,
+                      s.description as parent_description,
+                      r.rate as kb_rate, r.unit as kb_unit,
+                      r.confidence as kb_confidence,
+                      r.description as kb_description,
+                      r.source_jobs as kb_source_jobs
+               FROM bid_activity a
+               JOIN bid_sov_item s ON a.bid_sov_item_id = s.id
+               LEFT JOIN rate_library r ON a.cost_code = r.activity
+               WHERE s.bid_id = ?
+               ORDER BY s.sort_order, s.id, a.sort_order, a.id""",
+            (bid_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            kb_rate = d.get("kb_rate")
+            qty = d.get("quantity")
+            if kb_rate and qty:
+                d["est_mh"] = round(kb_rate * qty, 1)
+                d["est_unit_price"] = round(kb_rate * labor_rate, 2)
+                d["est_total"] = round(kb_rate * qty * labor_rate, 0)
+            else:
+                d["est_mh"] = None
+                d["est_unit_price"] = None
+                d["est_total"] = None
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+def apply_rate_to_activity(activity_id: int, unit_rate_mh: float,
+                           labor_rate: float, unit_price: float,
+                           total_price: float, source: str,
+                           confidence: str) -> bool:
+    """Apply a KB rate to an activity."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """UPDATE bid_activity
+               SET unit_rate_mh = ?, labor_rate = ?, unit_price = ?,
+                   total_price = ?, source = ?, confidence = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (unit_rate_mh, labor_rate, unit_price, total_price,
+             source, confidence, activity_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def apply_all_activity_rates(bid_id: int, labor_rate: float = 85.0) -> int:
+    """Apply KB rates to all coded activities for a bid. Returns count updated."""
+    activities = get_activity_rate_data(bid_id, labor_rate)
+    count = 0
+    for act in activities:
+        if act.get("kb_rate") and act.get("quantity") and act.get("est_total"):
+            source = f"KB rate {act['cost_code']} from Job {act.get('kb_source_jobs', '?')}"
+            apply_rate_to_activity(
+                act["id"], act["kb_rate"], labor_rate,
+                act["est_unit_price"], act["est_total"],
+                source, act.get("kb_confidence") or "limited",
+            )
+            count += 1
+    return count
+
+
+def get_activity_rate_summary(bid_id: int, labor_rate: float = 85.0) -> dict:
+    """Get summary stats for activity-level rate application."""
+    activities = get_activity_rate_data(bid_id, labor_rate)
+    total = len(activities)
+    has_rate = sum(1 for a in activities if a.get("kb_rate"))
+    applied = sum(1 for a in activities if a.get("total_price"))
+    est_total = sum(a.get("est_total") or 0 for a in activities)
+    return {
+        "total_activities": total,
+        "has_kb_rate": has_rate,
+        "rates_applied": applied,
+        "est_total": est_total,
     }
 
 

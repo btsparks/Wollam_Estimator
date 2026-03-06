@@ -76,7 +76,6 @@ class RateCardResult:
 
     total_budget: float | None = None
     total_actual: float | None = None
-    cpi: float | None = None                   # Cost Performance Index
     generated_date: datetime | None = None
     data_source: str = "hcss_api"
 
@@ -156,16 +155,11 @@ class RateCardGenerator:
             if item.variance_flag:
                 flagged.append(item)
 
-            # Accumulate totals for CPI calculation
+            # Accumulate totals
             if item.qty_budget is not None and item.bgt_cost_per_unit is not None:
                 total_budget += item.qty_budget * item.bgt_cost_per_unit
             if item.qty_actual is not None and item.act_cost_per_unit is not None:
                 total_actual += item.qty_actual * item.act_cost_per_unit
-
-        # CPI = budget / actual — above 1.0 means under budget
-        cpi = None
-        if total_actual > 0:
-            cpi = round(total_budget / total_actual, 3) if total_budget > 0 else None
 
         return RateCardResult(
             job_number=job_number,
@@ -174,7 +168,6 @@ class RateCardGenerator:
             flagged_items=flagged,
             total_budget=round(total_budget, 2) if total_budget else None,
             total_actual=round(total_actual, 2) if total_actual else None,
-            cpi=cpi,
             generated_date=datetime.now(),
             data_source="hcss_api",
         )

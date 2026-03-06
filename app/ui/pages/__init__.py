@@ -1,0 +1,1 @@
+"""WEIS NiceGUI pages."""

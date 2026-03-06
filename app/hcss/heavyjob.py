@@ -5,18 +5,17 @@ HeavyJob is HCSS's field cost tracking system. It contains what
 actually happened on each project: real hours, real costs, real
 quantities, real crew data.
 
-This wrapper provides typed methods for each HeavyJob endpoint.
-All methods return Pydantic models for type safety and validation.
+Endpoint patterns (discovered from production API):
+    /api/v1/jobs?businessUnitId={buId}              — List jobs
+    /api/v1/costCodes?jobId={jobId}                 — Cost codes (GET with query param)
+    /api/v1/costCodes/search                        — Cost codes (POST with jobIds)
+    /api/v1/timeCardInfo?jobId={jobId}              — Time card summaries (cursor pagination)
+    /api/v1/timeCards/{id}                          — Single time card detail (hours, cost codes)
+    /api/v1/businessUnits                           — List business units
+    /api/v1/employees?businessUnitId={buId}         — Employees
+    /api/v1/forecasts?businessUnitId={buId}         — Job forecasts
 
-Key endpoints (per HCSS API spec):
-    /api/v1/businessUnits/{buId}/jobs              — List jobs
-    /api/v1/businessUnits/{buId}/costCodes/search   — Cost codes (POST with jobIds)
-    /api/v1/businessUnits/{buId}/timeCards          — Time card summaries
-    /api/v1/businessUnits/{buId}/hours/employee     — Employee hours (POST)
-    /api/v1/businessUnits/{buId}/hours/equipment    — Equipment hours (POST)
-    /api/v1/businessUnits/{buId}/jobs/{jobId}/changeOrders  — Change orders
-    /api/v1/businessUnits/{buId}/jobs/{jobId}/materials     — Materials
-    /api/v1/businessUnits/{buId}/jobs/{jobId}/subcontracts  — Subcontracts
+Responses use {results: [...], metadata: {nextCursor: ...}} pagination format.
 """
 
 from __future__ import annotations
@@ -26,11 +25,8 @@ from typing import Any
 
 from app.hcss.client import HCSSClient
 from app.hcss.models import (
-    HJChangeOrder,
     HJCostCode,
     HJJob,
-    HJMaterial,
-    HJSubcontract,
     HJTimeCard,
 )
 
@@ -43,261 +39,186 @@ class HeavyJobAPI:
     Pydantic models. Pagination is handled automatically by the
     underlying HCSSClient.
 
-    Endpoint pattern: business unit ID is a path segment, not a query param.
-
     Usage:
         auth = HCSSAuth()
         client = HCSSClient(auth, base_url="https://api.hcssapps.com/heavyjob")
         hj = HeavyJobAPI(client, business_unit_id="abc-123")
-        jobs = await hj.get_jobs(status="Closed")
+        jobs = await hj.get_jobs(status="completed")
     """
 
     def __init__(self, client: HCSSClient, business_unit_id: str):
-        """
-        Args:
-            client: Authenticated HCSSClient instance.
-            business_unit_id: HCSS business unit UUID. Required for all queries.
-        """
         self._client = client
         self._bu_id = business_unit_id
 
-    @property
-    def _bu_path(self) -> str:
-        """Base path prefix with business unit ID."""
-        return f"/api/v1/businessUnits/{self._bu_id}"
+    async def get_business_units(self) -> list[dict]:
+        """List all business units accessible to this client."""
+        data = await self._client.get("/api/v1/businessUnits")
+        return data if isinstance(data, list) else data.get("results", [data])
 
     async def get_jobs(self, status: str | None = None) -> list[HJJob]:
         """
         List jobs for the business unit.
 
         Args:
-            status: Filter by job status ('Active', 'Closed', 'Pending').
+            status: Filter by status ('active', 'inactive', 'completed').
                     None returns all jobs.
-
-        Returns:
-            List of HJJob models.
         """
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"businessUnitId": self._bu_id}
         if status:
             params["status"] = status
 
         records = await self._client.get_paginated(
-            f"{self._bu_path}/jobs", params=params,
+            "/api/v1/jobs", params=params,
         )
         return [HJJob.model_validate(r) for r in records]
 
     async def get_job(self, job_id: str) -> HJJob:
-        """
-        Get a single job by its HCSS UUID.
-
-        Args:
-            job_id: HCSS job UUID.
-
-        Returns:
-            HJJob model.
-        """
-        data = await self._client.get(f"{self._bu_path}/jobs/{job_id}")
+        """Get a single job by its HCSS UUID."""
+        data = await self._client.get(f"/api/v1/jobs/{job_id}")
         return HJJob.model_validate(data)
 
     async def get_cost_codes(self, job_id: str) -> list[HJCostCode]:
         """
-        Get all cost codes for a job with budget and actual values.
+        Get all cost codes for a job with budget values.
 
-        This is the core data for rate calculation. Uses POST search
-        endpoint which accepts a list of job IDs (we send one at a time
-        for simplicity, but the API supports batch).
-
-        Args:
-            job_id: HCSS job UUID.
-
-        Returns:
-            List of HJCostCode models.
+        Uses query param endpoint which returns paginated results.
         """
-        # HCSS uses POST search endpoint for cost codes
-        data = await self._client.post(
-            f"{self._bu_path}/costCodes/search",
-            data={"jobIds": [job_id], "includeUnused": True},
+        records = await self._client.get_paginated(
+            "/api/v1/costCodes", params={"jobId": job_id},
         )
-        # Response may be a list or dict with data key
-        records = data if isinstance(data, list) else data.get("data", data.get("items", []))
         return [HJCostCode.model_validate(r) for r in records]
 
     async def get_cost_codes_batch(self, job_ids: list[str]) -> list[HJCostCode]:
         """
-        Get cost codes for multiple jobs in a single API call.
-
-        More efficient than calling get_cost_codes for each job separately.
-
-        Args:
-            job_ids: List of HCSS job UUIDs.
-
-        Returns:
-            List of HJCostCode models across all requested jobs.
+        Get cost codes for multiple jobs via POST search endpoint.
         """
         data = await self._client.post(
-            f"{self._bu_path}/costCodes/search",
-            data={"jobIds": job_ids, "includeUnused": True},
+            "/api/v1/costCodes/search",
+            data={"jobIds": job_ids},
         )
-        records = data if isinstance(data, list) else data.get("data", data.get("items", []))
+        records = data if isinstance(data, list) else data.get("results", data.get("data", []))
         return [HJCostCode.model_validate(r) for r in records]
 
-    async def get_timecards(
+    async def get_timecard_summaries(
+        self,
+        job_id: str | None = None,
+    ) -> list[dict]:
+        """
+        List timecard summaries for a job or entire business unit.
+
+        Uses /api/v1/timeCardInfo with cursor-based pagination.
+        Returns summary records with timecard IDs (no hours detail).
+        """
+        params: dict[str, Any] = {}
+        if job_id:
+            params["jobId"] = job_id
+        else:
+            params["businessUnitId"] = self._bu_id
+
+        return await self._client.get_cursor_paginated(
+            "/api/v1/timeCardInfo", params=params,
+        )
+
+    async def get_timecard_detail(self, timecard_id: str) -> dict:
+        """
+        Fetch full timecard detail including cost codes, employees, equipment.
+
+        Returns nested structure with:
+            costCodes: [{costCodeId, costCodeCode, quantity, unitOfMeasure, ...}]
+            employees: [{employeeId, employeeCode, regularHours, overtimeHours, ...}]
+            equipment: [{...}]
+        """
+        return await self._client.get(f"/api/v1/timeCards/{timecard_id}")
+
+    async def get_timecards_flat(
         self,
         job_id: str,
-        start_date: date | None = None,
-        end_date: date | None = None,
     ) -> list[HJTimeCard]:
         """
-        Get time card entries for a job.
+        Get all timecards for a job, flattened to one row per employee per cost code.
 
-        Time cards record daily crew labor by cost code — used for
-        crew analysis and production rate calculation.
-
-        Args:
-            job_id: HCSS job UUID.
-            start_date: Filter start (inclusive).
-            end_date: Filter end (inclusive).
-
-        Returns:
-            List of HJTimeCard models.
+        This is the main entry point for syncing actual labor hours.
+        Fetches timecard summaries, then detail for each, then flattens.
         """
-        params: dict[str, Any] = {"jobId": job_id}
-        if start_date:
-            params["startDate"] = start_date.isoformat()
-        if end_date:
-            params["endDate"] = end_date.isoformat()
+        summaries = await self.get_timecard_summaries(job_id=job_id)
+        if not summaries:
+            return []
 
-        records = await self._client.get_paginated(
-            f"{self._bu_path}/timeCards", params=params,
-        )
-        return [HJTimeCard.model_validate(r) for r in records]
+        flat_records: list[HJTimeCard] = []
+        for summary in summaries:
+            tc_id = summary.get("id")
+            if not tc_id:
+                continue
 
-    async def get_employee_hours(
-        self,
-        job_ids: list[str],
-        start_date: date | None = None,
-        end_date: date | None = None,
-    ) -> list[dict]:
-        """
-        Get aggregated employee hour summaries.
+            try:
+                detail = await self.get_timecard_detail(tc_id)
+            except Exception:
+                continue
 
-        Uses POST endpoint with job IDs and optional date range in body.
+            flat_records.extend(_flatten_timecard(detail))
 
-        Args:
-            job_ids: List of HCSS job UUIDs.
-            start_date: Filter start (inclusive).
-            end_date: Filter end (inclusive).
+        return flat_records
 
-        Returns:
-            List of employee hour summary records.
-        """
-        body: dict[str, Any] = {"jobIds": job_ids}
-        if start_date:
-            body["startDate"] = start_date.isoformat()
-        if end_date:
-            body["endDate"] = end_date.isoformat()
 
-        data = await self._client.post(f"{self._bu_path}/hours/employee", data=body)
-        return data if isinstance(data, list) else data.get("data", data.get("items", []))
+def _flatten_timecard(detail: dict) -> list[HJTimeCard]:
+    """
+    Flatten a nested timecard response into flat HJTimeCard rows.
 
-    async def get_equipment_hours(
-        self,
-        job_ids: list[str],
-        start_date: date | None = None,
-        end_date: date | None = None,
-    ) -> list[dict]:
-        """
-        Get aggregated equipment hour summaries.
+    Each row = one employee's hours on one cost code for one day.
+    Quantity is the cost code's daily production (same for all employees).
+    """
+    tc_id = detail.get("id")
+    job_id = detail.get("jobId")
+    tc_date_raw = detail.get("date")
+    # Keep as ISO string (YYYY-MM-DD)
+    tc_date = tc_date_raw[:10] if tc_date_raw else None
+    foreman_id = detail.get("foremanId")
+    is_approved = detail.get("isApproved", False)
+    status = "Approved" if is_approved else "Pending"
 
-        Uses POST endpoint with job IDs and optional date range in body.
+    cost_codes = detail.get("costCodes", [])
+    employees = detail.get("employees", [])
 
-        Args:
-            job_ids: List of HCSS job UUIDs.
-            start_date: Filter start (inclusive).
-            end_date: Filter end (inclusive).
+    # Build lookup: timeCardCostCodeId -> cost code info
+    cc_lookup: dict[str, dict] = {}
+    for cc in cost_codes:
+        cc_lookup[cc["timeCardCostCodeId"]] = cc
 
-        Returns:
-            List of equipment hour summary records.
-        """
-        body: dict[str, Any] = {"jobIds": job_ids}
-        if start_date:
-            body["startDate"] = start_date.isoformat()
-        if end_date:
-            body["endDate"] = end_date.isoformat()
+    rows: list[HJTimeCard] = []
 
-        data = await self._client.post(f"{self._bu_path}/hours/equipment", data=body)
-        return data if isinstance(data, list) else data.get("data", data.get("items", []))
+    for emp in employees:
+        emp_id = emp.get("employeeId")
+        emp_name = emp.get("employeeDescription") or emp.get("employeeCode")
 
-    async def get_change_orders(self, job_id: str) -> list[HJChangeOrder]:
-        """
-        Get change orders for a job.
+        # Collect hours by timeCardCostCodeId
+        hours_by_cc: dict[str, float] = {}
+        for entry in emp.get("regularHours", []):
+            cc_id = entry.get("timeCardCostCodeId")
+            hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
+        for entry in emp.get("overtimeHours", []):
+            cc_id = entry.get("timeCardCostCodeId")
+            hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
+        for entry in emp.get("doubleOvertimeHours", []):
+            cc_id = entry.get("timeCardCostCodeId")
+            hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
 
-        CO categories tell you about project risk:
-            SC (Scope Change) — owner-directed additions
-            DD (Design Development) — incomplete/evolving design
+        for tc_cc_id, total_hours in hours_by_cc.items():
+            if total_hours == 0:
+                continue
 
-        On Job 8576, DD-driven COs averaged 61% of total CO value.
+            cc_info = cc_lookup.get(tc_cc_id, {})
+            rows.append(HJTimeCard(
+                id=tc_id,
+                jobId=job_id,
+                costCodeId=cc_info.get("costCodeId"),
+                costCode=cc_info.get("costCodeCode"),
+                tc_date=tc_date,
+                employeeId=emp_id,
+                employeeName=emp_name,
+                hours=total_hours,
+                foremanId=foreman_id,
+                status=status,
+                quantity=cc_info.get("quantity"),
+            ))
 
-        Args:
-            job_id: HCSS job UUID.
-
-        Returns:
-            List of HJChangeOrder models.
-        """
-        records = await self._client.get_paginated(
-            f"{self._bu_path}/jobs/{job_id}/changeOrders",
-        )
-        return [HJChangeOrder.model_validate(r) for r in records]
-
-    async def get_forecasts(self, job_id: str) -> list[dict]:
-        """
-        Get forecast data for a job.
-
-        Returns raw dicts — schema validated during Phase C.
-
-        Args:
-            job_id: HCSS job UUID.
-
-        Returns:
-            List of forecast records.
-        """
-        return await self._client.get_paginated(
-            f"{self._bu_path}/jobs/{job_id}/forecasts",
-        )
-
-    async def get_materials(self, job_id: str) -> list[HJMaterial]:
-        """
-        Get material receipts for a job.
-
-        Material data feeds cost benchmarking — e.g., concrete at $265/CY
-        for mine site delivery vs $205/CY standard.
-
-        Args:
-            job_id: HCSS job UUID.
-
-        Returns:
-            List of HJMaterial models.
-        """
-        records = await self._client.get_paginated(
-            f"{self._bu_path}/jobs/{job_id}/materials",
-        )
-        return [HJMaterial.model_validate(r) for r in records]
-
-    async def get_subcontracts(self, job_id: str) -> list[HJSubcontract]:
-        """
-        Get subcontract data for a job.
-
-        Subcontract data tells us what scope was subbed out, to whom,
-        and at what cost — useful for sub cost benchmarking and
-        scope split decisions on future bids.
-
-        Args:
-            job_id: HCSS job UUID.
-
-        Returns:
-            List of HJSubcontract models.
-        """
-        records = await self._client.get_paginated(
-            f"{self._bu_path}/jobs/{job_id}/subcontracts",
-        )
-        return [HJSubcontract.model_validate(r) for r in records]
+    return rows

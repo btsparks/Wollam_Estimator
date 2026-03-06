@@ -99,7 +99,6 @@ PROJECT_EXPECTED = {
     "total_actual_mh": 108889.0,
     "total_budget_mh": 147691.0,
     "building_sf": 43560.0,
-    "cpi": 1.37,
     "projected_margin": 40.1,
     "duration_months": 24.0,
 }
@@ -252,7 +251,6 @@ def validate_completeness(conn):
             SUM(CASE WHEN job_name IS NULL THEN 1 ELSE 0 END) as null_name,
             SUM(CASE WHEN total_actual_cost IS NULL THEN 1 ELSE 0 END) as null_cost,
             SUM(CASE WHEN total_actual_mh IS NULL THEN 1 ELSE 0 END) as null_mh,
-            SUM(CASE WHEN cpi IS NULL THEN 1 ELSE 0 END) as null_cpi
         FROM projects
     """).fetchone()
     null_count = sum(project_nulls[k] for k in project_nulls.keys())

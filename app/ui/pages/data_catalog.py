@@ -73,7 +73,6 @@ async def data_catalog_page():
                         for label, val in [
                             ("Actual Cost", f"${proj['total_actual_cost']:,.0f}"),
                             ("Actual MH", f"{proj['total_actual_mh']:,.0f}" if proj.get("total_actual_mh") else None),
-                            ("CPI", f"{proj['cpi']:.2f}" if proj.get("cpi") else None),
                             ("Budget Cost", f"${proj['total_budget_cost']:,.0f}" if proj.get("total_budget_cost") else None),
                         ]:
                             if val:

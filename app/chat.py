@@ -63,7 +63,6 @@ def handle_status():
         table.add_column("Owner")
         table.add_column("Actual Cost", justify="right")
         table.add_column("Actual MH", justify="right")
-        table.add_column("CPI", justify="right")
 
         for p in overview["projects"]:
             table.add_row(
@@ -72,7 +71,6 @@ def handle_status():
                 p["owner"] or "",
                 f"${p['total_actual_cost']:,.0f}" if p.get("total_actual_cost") else "",
                 f"{p['total_actual_mh']:,.0f}" if p.get("total_actual_mh") else "",
-                f"{p['cpi']:.2f}" if p.get("cpi") else "",
             )
         console.print(table)
     else:
@@ -144,7 +142,7 @@ def handle_projects():
             f"Actual: ${p.get('total_actual_cost', 0):,.0f}\n"
             f"Budget MH: {p.get('total_budget_mh', 0):,.0f} | "
             f"Actual MH: {p.get('total_actual_mh', 0):,.0f}\n"
-            f"CPI: {p.get('cpi', 'N/A')} | Projected Margin: {p.get('projected_margin', 'N/A')}%",
+            f"Projected Margin: {p.get('projected_margin', 'N/A')}%",
             title=f"Job {p['job_number']}",
             border_style="cyan",
         ))

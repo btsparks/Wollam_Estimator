@@ -106,7 +106,7 @@ def ingest_project(conn) -> int:
             location, start_date, end_date, duration_months,
             contract_value, total_actual_cost, total_budget_cost,
             total_actual_mh, total_budget_mh, building_sf,
-            cpi, projected_margin, notes,
+            projected_margin, notes,
             cataloged_date, cataloged_by, data_quality
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
@@ -125,10 +125,9 @@ def ingest_project(conn) -> int:
         108889.0,
         147691.0,
         43560.0,
-        1.37,
         40.1,
-        "SPD (Solids Processing & Distribution) Pump Station. CPI of 1.37 indicates "
-        "conservative estimating. 2:1 slope VE saved ~$2.4M in earthwork.",
+        "SPD (Solids Processing & Distribution) Pump Station. "
+        "2:1 slope VE saved ~$2.4M in earthwork.",
         date.today().isoformat(),
         "Claude/Travis",
         "complete",
@@ -787,7 +786,7 @@ def ingest_lessons_learned(conn, project_id: int, disc_ids: dict):
          "Reduced offhaul by 60%, backfill by 63%. Single largest driver of earthwork profitability.",
          "Always request geotechnical analysis early for tailings work.", "pump_station"),
 
-        (None, "estimating", "HIGH", "CPI of 1.37 Indicates Conservative Estimating",
+        (None, "estimating", "HIGH", "Budget $48.7M vs Actual $35.6M -- 37% Under Budget",
          "Budget $48.7M vs actual $35.6M. 37% under budget overall.",
          "Projected gross margin of 40.1%.",
          "Validate historical rates against actual performance to calibrate estimates.", "all"),

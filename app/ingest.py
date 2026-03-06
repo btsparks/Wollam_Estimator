@@ -35,7 +35,6 @@ Your task: parse a JCD (Job Cost Data) markdown document and return ONLY a singl
     "total_actual_mh": "number or null",
     "total_budget_mh": "number or null",
     "building_sf": "number or null",
-    "cpi": "number or null",
     "projected_margin": "number or null",
     "notes": "string or null"
   },
@@ -368,7 +367,7 @@ def ingest_extracted_data(data: dict, cataloged_by: str = "WEIS Upload") -> dict
                 "job_name", "owner", "project_type", "contract_type", "location",
                 "start_date", "end_date", "duration_months", "contract_value",
                 "total_actual_cost", "total_budget_cost", "total_actual_mh",
-                "total_budget_mh", "building_sf", "cpi", "projected_margin", "notes",
+                "total_budget_mh", "building_sf", "projected_margin", "notes",
             ]
             for field in updatable:
                 new_val = project_data.get(field)
@@ -384,7 +383,7 @@ def ingest_extracted_data(data: dict, cataloged_by: str = "WEIS Upload") -> dict
                     job_number, job_name, owner, project_type, contract_type,
                     location, start_date, end_date, duration_months,
                     contract_value, total_actual_cost, total_budget_cost,
-                    total_actual_mh, total_budget_mh, building_sf, cpi,
+                    total_actual_mh, total_budget_mh, building_sf,
                     projected_margin, notes, cataloged_date, cataloged_by,
                     data_quality
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE('now'), ?, ?)""",
@@ -404,7 +403,6 @@ def ingest_extracted_data(data: dict, cataloged_by: str = "WEIS Upload") -> dict
                     project_data.get("total_actual_mh"),
                     project_data.get("total_budget_mh"),
                     project_data.get("building_sf"),
-                    project_data.get("cpi"),
                     project_data.get("projected_margin"),
                     project_data.get("notes"),
                     cataloged_by,
