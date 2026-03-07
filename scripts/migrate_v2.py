@@ -141,12 +141,29 @@ TIER_1_TABLES = [
         date            DATE NOT NULL,
         employee_id     TEXT,
         employee_name   TEXT,
+        employee_code   TEXT,                    -- Trade code (e.g., OE4 = operator)
         hours           REAL,
         equip_id        TEXT,
         equip_hours     REAL,
         foreman_id      TEXT,
         status          TEXT,                    -- 'Approved', 'Pending'
         quantity        REAL                     -- Production quantity recorded that day
+    )
+    """,
+
+    # Equipment entries from timecards — tracks equipment usage per cost code.
+    """
+    CREATE TABLE IF NOT EXISTS hj_equipment_entry (
+        entry_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_tc_id      TEXT,
+        job_id          INTEGER NOT NULL REFERENCES job(job_id),
+        cost_code       TEXT,
+        date            DATE,
+        equipment_id    TEXT,
+        equipment_code  TEXT,
+        equipment_desc  TEXT,
+        hours           REAL,
+        cost_code_id    TEXT
     )
     """,
 
@@ -340,6 +357,18 @@ TIER_2_TABLES = [
         variance_flag   BOOLEAN DEFAULT FALSE,   -- True if >20%
         variance_explanation TEXT,                -- From PM interview
 
+        -- Field intelligence (from timecard analysis)
+        timecard_count  INTEGER DEFAULT 0,
+        work_days       INTEGER DEFAULT 0,
+        crew_size_avg   REAL,
+        daily_qty_avg   REAL,
+        daily_qty_peak  REAL,
+        total_hours     REAL,
+        total_qty       REAL,
+        total_labor_cost REAL,
+        total_equip_cost REAL,
+        crew_breakdown  TEXT,                    -- JSON crew/equipment breakdown
+
         -- Source tracking
         source_codes    TEXT,                    -- Comma-separated cost codes if aggregated
 
@@ -469,6 +498,8 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_hj_cc_discipline ON hj_costcode(discipline)",
 
     # Rate item lookups by card + activity (unique constraint)
+    "CREATE INDEX IF NOT EXISTS idx_equip_entry_job ON hj_equipment_entry(job_id)",
+    "CREATE INDEX IF NOT EXISTS idx_equip_entry_cc ON hj_equipment_entry(job_id, cost_code)",
     "CREATE INDEX IF NOT EXISTS idx_ri_card_activity ON rate_item(card_id, activity)",
 
     # Filter rate items by discipline
@@ -562,6 +593,7 @@ def migrate(db_path: str = DB_PATH) -> dict:
 
     expected_v2 = {
         "sync_metadata", "business_unit", "job", "hj_costcode", "hj_timecard",
+        "hj_equipment_entry",
         "hj_change_order", "hj_material", "hj_subcontract", "hb_estimate",
         "hb_biditem", "hb_activity", "hb_resource", "rate_card", "rate_item",
         "crew_config", "lesson_learned", "rate_library", "benchmark",
@@ -570,7 +602,7 @@ def migrate(db_path: str = DB_PATH) -> dict:
     if missing:
         print(f"\n  WARNING: Missing tables: {', '.join(missing)}")
     else:
-        print(f"\n  All 16 v2.0 tables verified.")
+        print(f"\n  All {len(expected_v2)} v2.0 tables verified.")
 
     # Confirm v1.3 tables are untouched
     v13_tables = existing_tables - expected_v2

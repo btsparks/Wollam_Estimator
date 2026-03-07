@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database import init_db, get_connection
 
-COOLDOWN_MINUTES = 15
+COOLDOWN_MINUTES = 5
 MAX_RUNS = 50  # safety limit
 
 

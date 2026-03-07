@@ -1,18 +1,17 @@
 """
 Tests for the Transformation Layer
 
-Tests the discipline mapper, unit cost calculator, confidence assessment,
-variance flagging, and rate card generation using hardcoded values from
-Wollam's existing JCD data.
+Tests the discipline mapper, field intelligence confidence assessment,
+safe division, and rate card generation.
 
 These tests validate the core business logic that transforms raw HCSS
-cost code data into meaningful estimating rates.
+timecard data into field intelligence for estimating.
 """
 
 import pytest
 
 from app.transform.mapper import DisciplineMapper
-from app.transform.calculator import UnitCostCalculator
+from app.transform.calculator import assess_confidence, safe_divide
 
 
 # ─────────────────────────────────────────────────────────────
@@ -128,165 +127,93 @@ class TestDisciplineMapper:
 
 
 # ─────────────────────────────────────────────────────────────
-# Unit Cost Calculator Tests
+# Safe Divide Tests
 # ─────────────────────────────────────────────────────────────
 
-class TestUnitCostCalculator:
-    """Test unit cost calculation with known values from Wollam JCDs."""
+class TestSafeDivide:
+    """Test safe division utility used for MH/unit and $/unit calculations."""
 
-    @pytest.fixture
-    def calc(self):
-        return UnitCostCalculator()
+    def test_basic_division(self):
+        """Normal division returns rounded result."""
+        assert safe_divide(1264, 5100) == pytest.approx(0.2478, abs=0.0001)
 
-    def test_basic_labor_rate(self, calc):
-        """Basic MH/unit calculation with known inputs."""
-        result = calc.calculate_labor_rate(
-            budget_hours=1400,
-            actual_hours=1264,
-            budget_qty=5000,
-            actual_qty=5100,
-            budget_cost=77000,
-            actual_cost=69520,
-        )
-        assert result["bgt_mh_per_unit"] == pytest.approx(0.28, abs=0.01)
-        assert result["act_mh_per_unit"] == pytest.approx(0.248, abs=0.01)
-        assert result["bgt_cost_per_unit"] == pytest.approx(15.40, abs=0.10)
-        assert result["act_cost_per_unit"] == pytest.approx(13.63, abs=0.10)
+    def test_zero_denominator(self):
+        """Zero denominator returns None instead of raising."""
+        assert safe_divide(100, 0) is None
 
-    def test_recommended_rate_actual_under_budget(self, calc):
-        """When actual < budget, recommended rate weights 80% toward actual."""
-        # actual=0.20, budget=0.28
-        # rec = 0.20 + (0.28 - 0.20) * 0.2 = 0.20 + 0.016 = 0.216
-        rate, basis = calc.calculate_recommended_rate(0.28, 0.20)
-        assert rate == pytest.approx(0.216, abs=0.001)
-        assert basis == "calculated"
+    def test_none_numerator(self):
+        """None numerator returns None."""
+        assert safe_divide(None, 100) is None
 
-    def test_recommended_rate_actual_over_budget(self, calc):
-        """When actual > budget, recommended rate splits the difference 50/50."""
-        # actual=0.35, budget=0.28
-        # rec = 0.28 + (0.35 - 0.28) * 0.5 = 0.28 + 0.035 = 0.315
-        rate, basis = calc.calculate_recommended_rate(0.28, 0.35)
-        assert rate == pytest.approx(0.315, abs=0.001)
-        assert basis == "calculated"
+    def test_none_denominator(self):
+        """None denominator returns None."""
+        assert safe_divide(100, None) is None
 
-    def test_recommended_rate_actual_equals_budget(self, calc):
-        """When actual == budget, recommended rate equals both."""
-        rate, basis = calc.calculate_recommended_rate(0.28, 0.28)
-        assert rate == pytest.approx(0.28, abs=0.001)
-        assert basis == "calculated"
+    def test_both_none(self):
+        """Both None returns None."""
+        assert safe_divide(None, None) is None
 
-    def test_recommended_rate_actual_only(self, calc):
-        """When only actual exists, use actual as recommended."""
-        rate, basis = calc.calculate_recommended_rate(None, 0.25)
-        assert rate == 0.25
-        assert basis == "actual"
+    def test_zero_numerator(self):
+        """Zero numerator returns 0.0, not None."""
+        assert safe_divide(0, 100) == 0.0
 
-    def test_recommended_rate_budget_only(self, calc):
-        """When only budget exists, use budget as recommended."""
-        rate, basis = calc.calculate_recommended_rate(0.28, None)
-        assert rate == 0.28
-        assert basis == "budget"
+    def test_large_values(self):
+        """Handles large values without overflow."""
+        result = safe_divide(69520, 5100)
+        assert result == pytest.approx(13.6314, abs=0.001)
 
-    def test_recommended_rate_neither(self, calc):
-        """When neither exists, return None."""
-        rate, basis = calc.calculate_recommended_rate(None, None)
-        assert rate is None
-        assert basis is None
+    def test_rounding(self):
+        """Results are rounded to 4 decimal places."""
+        result = safe_divide(1, 3)
+        assert result == 0.3333
 
-    def test_confidence_strong(self, calc):
-        """Strong confidence: >=90% complete with both data sources."""
-        level, reason = calc.assess_confidence(
-            pct_complete=95.0,
-            has_budget=True,
-            has_actual=True,
-            actual_qty=500,
-        )
-        assert level == "strong"
 
-    def test_confidence_moderate(self, calc):
-        """Moderate confidence: 50-89% complete with actual data."""
-        level, reason = calc.assess_confidence(
-            pct_complete=75.0,
-            has_budget=True,
-            has_actual=True,
-            actual_qty=500,
-        )
+# ─────────────────────────────────────────────────────────────
+# Confidence Assessment Tests
+# ─────────────────────────────────────────────────────────────
+
+class TestAssessConfidence:
+    """Test confidence assessment based on timecard data richness."""
+
+    def test_high_confidence(self):
+        """HIGH: 20+ timecards across 10+ work days."""
+        level, reason = assess_confidence(timecard_count=50, work_days=20)
+        assert level == "high"
+        assert "50 timecards" in reason
+
+    def test_high_at_threshold(self):
+        """HIGH: exactly at the threshold (20 tc, 10 days)."""
+        level, reason = assess_confidence(timecard_count=20, work_days=10)
+        assert level == "high"
+
+    def test_high_tc_but_few_days(self):
+        """MODERATE: enough timecards but not enough work days."""
+        level, reason = assess_confidence(timecard_count=25, work_days=5)
         assert level == "moderate"
 
-    def test_confidence_limited_budget_only(self, calc):
-        """Limited confidence: budget data only, no actuals."""
-        level, reason = calc.assess_confidence(
-            pct_complete=0,
-            has_budget=True,
-            has_actual=False,
-        )
-        assert level == "limited"
+    def test_moderate_confidence(self):
+        """MODERATE: 5-19 timecards."""
+        level, reason = assess_confidence(timecard_count=10, work_days=5)
+        assert level == "moderate"
 
-    def test_confidence_none(self, calc):
-        """No confidence: no budget or actual data."""
-        level, reason = calc.assess_confidence(
-            pct_complete=0,
-            has_budget=False,
-            has_actual=False,
-        )
+    def test_moderate_at_threshold(self):
+        """MODERATE: exactly at the lower threshold (5 tc)."""
+        level, reason = assess_confidence(timecard_count=5, work_days=3)
+        assert level == "moderate"
+
+    def test_low_confidence(self):
+        """LOW: 1-4 timecards — thin data."""
+        level, reason = assess_confidence(timecard_count=3, work_days=2)
+        assert level == "low"
+        assert "thin data" in reason.lower() or "caution" in reason.lower()
+
+    def test_low_single_timecard(self):
+        """LOW: single timecard — could be a fluke."""
+        level, reason = assess_confidence(timecard_count=1, work_days=1)
+        assert level == "low"
+
+    def test_none_confidence(self):
+        """NONE: zero timecards — no field data at all."""
+        level, reason = assess_confidence(timecard_count=0, work_days=0)
         assert level == "none"
-
-    def test_variance_flagging_over_threshold(self, calc):
-        """Variance >20% gets flagged."""
-        variance, flagged = calc.calculate_variance(0.28, 0.35)
-        assert variance == pytest.approx(25.0, abs=1.0)
-        assert flagged is True
-
-    def test_variance_within_threshold(self, calc):
-        """Variance <=20% is not flagged."""
-        variance, flagged = calc.calculate_variance(0.28, 0.30)
-        assert variance == pytest.approx(7.14, abs=1.0)
-        assert flagged is False
-
-    def test_variance_under_budget(self, calc):
-        """Negative variance (under budget) can also be flagged if >20%."""
-        variance, flagged = calc.calculate_variance(0.28, 0.20)
-        assert variance < 0  # Under budget
-        assert flagged is True  # But still >20% magnitude
-
-    def test_variance_zero_budget(self, calc):
-        """Zero budget returns None variance (can't divide by zero)."""
-        variance, flagged = calc.calculate_variance(0, 100)
-        assert variance is None
-        assert flagged is False
-
-    def test_variance_none_inputs(self, calc):
-        """None inputs return None variance."""
-        variance, flagged = calc.calculate_variance(None, 100)
-        assert variance is None
-        assert flagged is False
-
-    def test_division_by_zero_qty(self, calc):
-        """Zero quantity returns None for rates, no exceptions."""
-        result = calc.calculate_labor_rate(
-            budget_hours=100,
-            actual_hours=90,
-            budget_qty=0,        # Zero quantity — can't calculate rate
-            actual_qty=0,
-            budget_cost=5000,
-            actual_cost=4500,
-        )
-        assert result["bgt_mh_per_unit"] is None
-        assert result["act_mh_per_unit"] is None
-        assert result["bgt_cost_per_unit"] is None
-        assert result["act_cost_per_unit"] is None
-
-    def test_all_none_inputs(self, calc):
-        """All None inputs return all None results, no exceptions."""
-        result = calc.calculate_labor_rate(
-            budget_hours=None,
-            actual_hours=None,
-            budget_qty=None,
-            actual_qty=None,
-            budget_cost=None,
-            actual_cost=None,
-        )
-        assert result["bgt_mh_per_unit"] is None
-        assert result["act_mh_per_unit"] is None
-        assert result["rec_rate"] is None
-        assert result["rec_basis"] is None
+        assert "no timecard" in reason.lower()

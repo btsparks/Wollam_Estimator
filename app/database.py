@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "1.6"
+SCHEMA_VERSION = "1.7"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -604,6 +604,63 @@ def _migrate_1_5_to_1_6(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '1.6'")
 
 
+def _migrate_1_6_to_1_7(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.6 to 1.7: field intelligence rate cards.
+
+    Changes:
+    1. Add employee_code to hj_timecard (trade code like OE4)
+    2. Create hj_equipment_entry table (equipment per cost code per day)
+    3. Rework rate_item: drop budget-centric fields, add activity-level fields
+    """
+    # 1. Add employee_code to timecards
+    for col_sql in [
+        "ALTER TABLE hj_timecard ADD COLUMN employee_code TEXT",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass
+
+    # 2. Equipment entry table — one row per equipment per cost code per day
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS hj_equipment_entry (
+        entry_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_tc_id          TEXT,
+        job_id              INTEGER NOT NULL REFERENCES job(job_id),
+        cost_code           TEXT,
+        date                DATE,
+        equipment_id        TEXT,
+        equipment_code      TEXT,
+        equipment_desc      TEXT,
+        hours               REAL,
+        cost_code_id        TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_equip_entry_job ON hj_equipment_entry(job_id);
+    CREATE INDEX IF NOT EXISTS idx_equip_entry_cc ON hj_equipment_entry(job_id, cost_code);
+    """)
+
+    # 3. Rework rate_item — add field intelligence columns
+    for col_sql in [
+        "ALTER TABLE rate_item ADD COLUMN timecard_count INTEGER DEFAULT 0",
+        "ALTER TABLE rate_item ADD COLUMN work_days INTEGER DEFAULT 0",
+        "ALTER TABLE rate_item ADD COLUMN crew_size_avg REAL",
+        "ALTER TABLE rate_item ADD COLUMN daily_qty_avg REAL",
+        "ALTER TABLE rate_item ADD COLUMN daily_qty_peak REAL",
+        "ALTER TABLE rate_item ADD COLUMN total_hours REAL",
+        "ALTER TABLE rate_item ADD COLUMN total_qty REAL",
+        "ALTER TABLE rate_item ADD COLUMN total_labor_cost REAL",
+        "ALTER TABLE rate_item ADD COLUMN total_equip_cost REAL",
+        "ALTER TABLE rate_item ADD COLUMN crew_breakdown TEXT",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass
+
+    conn.execute("UPDATE schema_version SET version = '1.7'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -639,6 +696,9 @@ def init_db(db_path: Path = None) -> None:
                 current = "1.5"
             if current == "1.5":
                 _migrate_1_5_to_1_6(conn)
+                current = "1.6"
+            if current == "1.6":
+                _migrate_1_6_to_1_7(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

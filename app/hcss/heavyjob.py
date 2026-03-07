@@ -26,6 +26,7 @@ from typing import Any
 from app.hcss.client import HCSSClient
 from app.hcss.models import (
     HJCostCode,
+    HJEquipmentEntry,
     HJJob,
     HJTimeCard,
 )
@@ -170,7 +171,6 @@ def _flatten_timecard(detail: dict) -> list[HJTimeCard]:
     tc_id = detail.get("id")
     job_id = detail.get("jobId")
     tc_date_raw = detail.get("date")
-    # Keep as ISO string (YYYY-MM-DD)
     tc_date = tc_date_raw[:10] if tc_date_raw else None
     foreman_id = detail.get("foremanId")
     is_approved = detail.get("isApproved", False)
@@ -189,6 +189,7 @@ def _flatten_timecard(detail: dict) -> list[HJTimeCard]:
     for emp in employees:
         emp_id = emp.get("employeeId")
         emp_name = emp.get("employeeDescription") or emp.get("employeeCode")
+        emp_code = emp.get("employeeCode")  # Trade code (e.g., OE4)
 
         # Collect hours by timeCardCostCodeId
         hours_by_cc: dict[str, float] = {}
@@ -215,10 +216,71 @@ def _flatten_timecard(detail: dict) -> list[HJTimeCard]:
                 tc_date=tc_date,
                 employeeId=emp_id,
                 employeeName=emp_name,
+                employeeCode=emp_code,
                 hours=total_hours,
                 foremanId=foreman_id,
                 status=status,
                 quantity=cc_info.get("quantity"),
+            ))
+
+    return rows
+
+
+def _flatten_equipment(detail: dict) -> list[HJEquipmentEntry]:
+    """
+    Flatten equipment entries from a timecard response.
+
+    Each row = one piece of equipment on one cost code for one day.
+    """
+    tc_id = detail.get("id")
+    job_id = detail.get("jobId")
+    tc_date_raw = detail.get("date")
+    tc_date = tc_date_raw[:10] if tc_date_raw else None
+
+    cost_codes = detail.get("costCodes", [])
+    equipment_list = detail.get("equipment", [])
+
+    if not equipment_list:
+        return []
+
+    cc_lookup: dict[str, dict] = {}
+    for cc in cost_codes:
+        cc_lookup[cc["timeCardCostCodeId"]] = cc
+
+    rows: list[HJEquipmentEntry] = []
+
+    for equip in equipment_list:
+        equip_id = equip.get("equipmentId")
+        equip_code = equip.get("equipmentCode")
+        equip_desc = equip.get("equipmentDescription") or equip_code
+
+        # Collect hours by timeCardCostCodeId
+        hours_by_cc: dict[str, float] = {}
+        for entry in equip.get("regularHours", []):
+            cc_id = entry.get("timeCardCostCodeId")
+            hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
+        for entry in equip.get("overtimeHours", []):
+            cc_id = entry.get("timeCardCostCodeId")
+            hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
+        for entry in equip.get("doubleOvertimeHours", []):
+            cc_id = entry.get("timeCardCostCodeId")
+            hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
+
+        for tc_cc_id, total_hours in hours_by_cc.items():
+            if total_hours == 0:
+                continue
+
+            cc_info = cc_lookup.get(tc_cc_id, {})
+            rows.append(HJEquipmentEntry(
+                id=tc_id,
+                jobId=job_id,
+                costCodeId=cc_info.get("costCodeId"),
+                costCode=cc_info.get("costCodeCode"),
+                tc_date=tc_date,
+                equipmentId=equip_id,
+                equipmentCode=equip_code,
+                equipmentDesc=equip_desc,
+                hours=total_hours,
             ))
 
     return rows

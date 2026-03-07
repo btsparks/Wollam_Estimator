@@ -19,7 +19,7 @@ def set(key: str, value):
     """Set a value in browser storage. No-op if not connected."""
     try:
         app.storage.browser[key] = value
-    except RuntimeError:
+    except (RuntimeError, TypeError):
         pass
 
 

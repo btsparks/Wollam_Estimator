@@ -438,8 +438,14 @@ def upsert_rate_items(items: list[RateItemResult], card_id: int) -> int:
                        rec_rate, rec_basis,
                        qty_budget, qty_actual,
                        confidence, confidence_reason,
-                       variance_pct, variance_flag)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       variance_pct, variance_flag,
+                       timecard_count, work_days, crew_size_avg,
+                       daily_qty_avg, daily_qty_peak,
+                       total_hours, total_qty,
+                       total_labor_cost, total_equip_cost,
+                       crew_breakdown)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(card_id, activity) DO UPDATE SET
                        discipline = excluded.discipline,
                        description = excluded.description,
@@ -455,7 +461,17 @@ def upsert_rate_items(items: list[RateItemResult], card_id: int) -> int:
                        confidence = excluded.confidence,
                        confidence_reason = excluded.confidence_reason,
                        variance_pct = excluded.variance_pct,
-                       variance_flag = excluded.variance_flag""",
+                       variance_flag = excluded.variance_flag,
+                       timecard_count = excluded.timecard_count,
+                       work_days = excluded.work_days,
+                       crew_size_avg = excluded.crew_size_avg,
+                       daily_qty_avg = excluded.daily_qty_avg,
+                       daily_qty_peak = excluded.daily_qty_peak,
+                       total_hours = excluded.total_hours,
+                       total_qty = excluded.total_qty,
+                       total_labor_cost = excluded.total_labor_cost,
+                       total_equip_cost = excluded.total_equip_cost,
+                       crew_breakdown = excluded.crew_breakdown""",
                 (
                     card_id, item.discipline, item.activity,
                     item.description, item.unit,
@@ -465,6 +481,11 @@ def upsert_rate_items(items: list[RateItemResult], card_id: int) -> int:
                     item.qty_budget, item.qty_actual,
                     item.confidence, item.confidence_reason,
                     item.variance_pct, item.variance_flag,
+                    item.timecard_count, item.work_days, item.crew_size_avg,
+                    item.daily_qty_avg, item.daily_qty_peak,
+                    item.total_hours, item.total_qty,
+                    item.total_labor_cost, item.total_equip_cost,
+                    item.crew_breakdown,
                 ),
             )
             count += 1

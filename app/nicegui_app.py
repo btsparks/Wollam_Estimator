@@ -31,7 +31,7 @@ if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
         title="WEIS — Wollam Estimating Intelligence System",
         port=8081,
-        storage_secret="weis-nicegui-storage-2026",
+        storage_secret="weis-nicegui-storage-2026-v2",
         favicon="🏗️",
         show=False,
     )

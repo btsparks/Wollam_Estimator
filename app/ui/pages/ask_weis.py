@@ -1,6 +1,6 @@
-"""Ask WEIS page — General KB chat (extracted from home.py)."""
+"""Ask WEIS page — Estimating Intelligence Assistant."""
 
-from nicegui import ui, run
+from nicegui import ui, run, app
 from app.ui.layout import page_layout
 from app.ui.components import page_header
 from app.ui import state
@@ -24,28 +24,33 @@ def _get_engine():
 
 
 EXAMPLE_QUESTIONS = [
-    "What did we pay for 20-inch flanged joints?",
-    "What was our concrete cost per CY?",
-    "What crew did we use for mat pours?",
-    "What was our GC percentage?",
-    "What lessons did we learn about piping?",
+    "What's a typical MH/CY for excavation?",
+    "What production rate should I use for wall formwork?",
+    "Show me all jobs with piping data",
+    "What crew did we use for concrete pours on 8553?",
+    "What lessons learned do we have for earthwork?",
+    "What subcontractors have we used for rebar?",
 ]
 
 BID_EXAMPLE_QUESTIONS = [
     "What does the RFP say about concrete?",
     "What are the spec requirements for pipe supports?",
     "Summarize the bid scope",
-    "Compare the RFP concrete scope to what we did on 8553",
 ]
 
 
 @ui.page("/ask-weis")
-async def ask_weis_page():
+def ask_weis_page():
     state.set("current_path", "/ask-weis")
     page_layout("Ask WEIS")
 
+    # Use user storage for chat messages (survives async callbacks)
+    if "weis_messages" not in app.storage.user:
+        app.storage.user["weis_messages"] = []
+    messages = app.storage.user["weis_messages"]
+
     with ui.column().classes("w-full nicegui-content").style("gap: 1rem"):
-        page_header("Ask WEIS", "Query your historical job cost intelligence")
+        page_header("Ask WEIS", "Your estimating intelligence assistant — ask about rates, production, crews, and historical data")
 
         # Engine check
         engine, engine_error = _get_engine()
@@ -58,85 +63,120 @@ async def ask_weis_page():
 
         # Chat area
         with ui.card().classes("w-full"):
-            ui.label("Chat").classes("text-h6 text-weight-bold q-mb-sm")
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Chat").classes("text-h6 text-weight-bold")
+                ui.button("Clear", icon="delete_sweep",
+                          on_click=lambda: _clear_chat(chat_container, messages)) \
+                    .props("flat dense size=sm color=grey-7 no-caps")
 
             # Chat messages container
             chat_container = ui.column().classes("w-full overflow-y-auto").style(
-                "gap: 0.5rem; max-height: 500px")
+                "gap: 0.75rem; max-height: 600px; scroll-behavior: smooth")
 
-            messages = state.get("messages", [])
             with chat_container:
-                _render_messages(messages)
+                if not messages:
+                    with ui.card().classes("w-full bg-blue-1 q-pa-md"):
+                        ui.markdown(
+                            "**Welcome to Ask WEIS.** I'm your estimating intelligence assistant. "
+                            "I have access to 197 jobs, 15,000+ cost codes, and 221,000+ timecard rows "
+                            "from Wollam's HeavyJob data.\n\n"
+                            "Ask me about production rates, labor hours, crew data, materials, "
+                            "subcontractors, or lessons learned. Try one of the examples below."
+                        ).classes("text-body2")
+                else:
+                    _render_messages(messages)
 
             # Example questions
             focus = query.get_focus_bid() if engine else None
             with ui.row().classes("w-full flex-wrap q-mt-sm").style("gap: 0.25rem"):
                 examples = (BID_EXAMPLE_QUESTIONS if focus else []) + EXAMPLE_QUESTIONS
                 for ex in examples[:6]:
-                    ui.button(ex, on_click=lambda q=ex: _send_message(q, chat_container)) \
+                    ui.button(ex,
+                              on_click=_make_send_handler(ex, chat_container, messages)) \
                         .props("flat dense size=sm color=primary no-caps") \
                         .classes("text-xs")
 
-            # Input
+            # Input row
             with ui.row().classes("w-full items-center q-mt-sm").style("gap: 0.5rem"):
-                chat_input = ui.input(placeholder="Ask a question about historical job cost data...") \
-                    .classes("flex-grow")
-                send_btn = ui.button(icon="send", on_click=lambda: _send_message(
-                    chat_input.value, chat_container, chat_input)) \
+                chat_input = ui.input(placeholder="Ask about rates, production, crews, materials, lessons learned...") \
+                    .classes("flex-grow") \
+                    .props('clearable')
+
+                async def on_send_click():
+                    question = chat_input.value
+                    if not question or not question.strip():
+                        return
+                    chat_input.value = ""
+                    await _send_message(question, chat_container, messages)
+
+                ui.button(icon="send", on_click=on_send_click) \
                     .props("round color=primary")
-                chat_input.on("keydown.enter", lambda: _send_message(
-                    chat_input.value, chat_container, chat_input))
+                chat_input.on("keydown.enter", on_send_click)
+
+
+def _make_send_handler(question, container, messages):
+    """Create an async click handler for an example question button."""
+    async def handler():
+        await _send_message(question, container, messages)
+    return handler
 
 
 def _render_messages(messages):
     for msg in messages:
         is_user = msg["role"] == "user"
-        with ui.chat_message(
-            text=msg["content"],
-            name="You" if is_user else "WEIS",
-            sent=is_user,
-        ).classes("chat-user" if is_user else "chat-assistant"):
-            pass
+        if is_user:
+            with ui.chat_message(name="You", sent=True).classes("chat-user"):
+                ui.label(msg["content"])
+        else:
+            with ui.chat_message(name="WEIS", sent=False).classes("chat-assistant"):
+                ui.markdown(msg["content"]).classes("text-body2")
 
 
-async def _send_message(question: str, container, input_el=None):
-    if not question or not question.strip():
-        return
+def _clear_chat(container, messages):
+    engine, _ = _get_engine()
+    if engine:
+        engine.reset()
+    messages.clear()
+    container.clear()
+    with container:
+        with ui.card().classes("w-full bg-blue-1 q-pa-md"):
+            ui.markdown(
+                "**Chat cleared.** Ask me anything about your historical job data."
+            ).classes("text-body2")
 
+
+async def _send_message(question: str, container, messages):
     engine, engine_error = _get_engine()
     if not engine:
         ui.notify(f"Chat unavailable: {engine_error}", type="negative")
         return
 
-    # Clear input
-    if input_el:
-        input_el.value = ""
-
     # Store user message
-    messages = state.get("messages", [])
     messages.append({"role": "user", "content": question})
-    state.set("messages", messages)
 
     # Render user message
     with container:
-        ui.chat_message(text=question, name="You", sent=True).classes("chat-user")
+        with ui.chat_message(name="You", sent=True).classes("chat-user"):
+            ui.label(question)
 
     # Show spinner
     with container:
         spinner = ui.chat_message(name="WEIS", sent=False).classes("chat-assistant")
         with spinner:
-            loading = ui.spinner("dots", size="lg")
+            with ui.row().classes("items-center").style("gap: 0.5rem"):
+                ui.spinner("dots", size="lg")
+                ui.label("Querying data...").classes("text-caption text-grey-6")
 
     # Get AI response in thread pool
     try:
         response = await run.io_bound(engine.ask, question)
     except Exception as e:
-        response = f"**Error:** {e}"
+        response = f"### Error\n{e}"
 
     # Remove spinner, render response
     container.remove(spinner)
     messages.append({"role": "assistant", "content": response})
-    state.set("messages", messages)
 
     with container:
-        ui.chat_message(text=response, name="WEIS", sent=False).classes("chat-assistant")
+        with ui.chat_message(name="WEIS", sent=False).classes("chat-assistant"):
+            ui.markdown(response).classes("text-body2")

@@ -211,22 +211,17 @@ class TestStorage:
 class TestRateCardValidation:
     """Validate rate card correctness against known Phase B targets."""
 
-    def test_flagged_items_stored(self):
-        """Items with >20% variance have variance_flag = TRUE."""
+    def test_no_variance_flags_in_field_intel(self):
+        """Field intelligence cards don't flag variance (no budget comparison)."""
         orchestrator = _create_orchestrator()
         _run(orchestrator.sync_all_closed_jobs())
 
         cards = storage.get_all_rate_cards()
-        total_flagged = 0
         for card in cards:
-            flagged = storage.get_flagged_items_for_card(card["card_id"])
-            total_flagged += len(flagged)
-            for item in flagged:
-                assert item["variance_flag"] == 1
-                assert abs(item["variance_pct"]) > 20
-
-        # We know from Phase B data that there are flagged items
-        assert total_flagged > 0
+            items = storage.get_rate_items_for_card(card["card_id"])
+            for item in items:
+                assert item["variance_flag"] == 0
+                assert item["variance_pct"] is None
 
     def test_wall_fs_rate_8553(self):
         """Wall F/S (code 2340) on 8553 should be ~0.276 MH/SF actual."""
@@ -507,7 +502,7 @@ class TestFileSource:
         assert len(items) > 50
 
     def test_file_sync_has_flagged_items(self):
-        """File-synced rate cards have flagged variance items."""
+        """File-synced rate cards have no variance flags (field intel mode)."""
         orchestrator = self._create_file_orchestrator()
         _run(orchestrator.sync_all_closed_jobs())
 
@@ -516,5 +511,7 @@ class TestFileSource:
         assert len(file_cards) == 2
 
         for card in file_cards:
-            flagged = storage.get_flagged_items_for_card(card["card_id"])
-            assert len(flagged) > 0, f"Job {card['job_number']} should have flagged items"
+            items = storage.get_rate_items_for_card(card["card_id"])
+            assert len(items) > 0, f"Job {card['job_number']} should have rate items"
+            for item in items:
+                assert item["variance_flag"] == 0

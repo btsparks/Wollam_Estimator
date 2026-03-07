@@ -218,6 +218,7 @@ class HJTimeCard(BaseModel):
     tc_date: Optional[str] = None              # ISO date string (YYYY-MM-DD)
     employeeId: Optional[str] = None
     employeeName: Optional[str] = None
+    employeeCode: Optional[str] = None         # Trade code (e.g., OE4 = operator)
     hours: Optional[float] = None              # Total hours (regular + OT + DOT)
     equipmentId: Optional[str] = None
     equipmentHours: Optional[float] = None
@@ -226,6 +227,26 @@ class HJTimeCard(BaseModel):
     quantity: Optional[float] = None           # Production quantity that day
 
     _strip_name = field_validator("employeeName", mode="before")(_strip_str)
+
+
+class HJEquipmentEntry(BaseModel):
+    """
+    HeavyJob equipment entry from a timecard.
+
+    One row = one piece of equipment on one cost code for one day.
+    Captured from the equipment array in the timecard detail response.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    id: Optional[str] = None                   # HCSS timecard UUID
+    jobId: Optional[str] = None
+    costCodeId: Optional[str] = None
+    costCode: Optional[str] = None
+    tc_date: Optional[str] = None
+    equipmentId: Optional[str] = None
+    equipmentCode: Optional[str] = None        # Equipment number (e.g., 375EXC)
+    equipmentDesc: Optional[str] = None        # Equipment description
+    hours: Optional[float] = None
 
 
 class HJChangeOrder(BaseModel):
