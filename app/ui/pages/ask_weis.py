@@ -129,7 +129,7 @@ def _render_messages(messages):
                 ui.label(msg["content"])
         else:
             with ui.chat_message(name="WEIS", sent=False).classes("chat-assistant"):
-                ui.markdown(msg["content"]).classes("text-body2")
+                ui.markdown(msg["content"], extras=["tables"]).classes("text-body2")
 
 
 def _clear_chat(container, messages):
@@ -179,4 +179,4 @@ async def _send_message(question: str, container, messages):
 
     with container:
         with ui.chat_message(name="WEIS", sent=False).classes("chat-assistant"):
-            ui.markdown(response).classes("text-body2")
+            ui.markdown(response, extras=["tables"]).classes("text-body2")

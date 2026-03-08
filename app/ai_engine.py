@@ -25,11 +25,10 @@ HEAVYJOB_TOOLS = [
     {
         "name": "search_heavyjob_costcodes",
         "description": (
-            "Search HCSS HeavyJob cost codes across all jobs. This is the PRIMARY data source "
-            "with 15,000+ cost codes containing budget hours, budget quantities, actual labor hours, "
-            "and actual quantities from field timecards. Use this for any question about labor hours, "
-            "production rates, MH/unit, quantities, or cost code performance across projects. "
-            "Returns budget vs actual comparison for matching cost codes."
+            "Search HCSS HeavyJob cost codes across all jobs. Primary data source "
+            "with 15,000+ cost codes containing actual labor hours and quantities from field timecards. "
+            "Use for questions about labor hours, production rates, MH/unit, quantities, or "
+            "cost code activity across projects."
         ),
         "input_schema": {
             "type": "object",
@@ -65,11 +64,11 @@ HEAVYJOB_TOOLS = [
     {
         "name": "search_rate_items",
         "description": (
-            "Search calculated rate items (MH/unit rates) from the rate card system. "
-            "Each rate item has budget MH/unit, actual MH/unit, recommended rate, confidence level, "
-            "and variance analysis. Use this when the user asks 'what rate should I use', "
-            "'what's typical MH/unit for X', or wants recommended estimating rates. "
-            "Confidence levels: strong (reliable), moderate (usable with judgment), limited (cross-reference needed)."
+            "Search field intelligence rate items from the rate card system. "
+            "Each item has actual MH/unit, $/unit (labor+equipment), timecard count, crew data, "
+            "and confidence level based on data richness. Use when the user asks 'what rate should I use', "
+            "'what's typical MH/unit for X', or wants production rates with confidence assessment. "
+            "Confidence: high (20+ timecards), moderate (5-19), low (1-4)."
         ),
         "input_schema": {
             "type": "object",
@@ -88,7 +87,7 @@ HEAVYJOB_TOOLS = [
                 },
                 "min_confidence": {
                     "type": "string",
-                    "description": "Minimum confidence level: 'moderate' (includes moderate+strong) or 'strong' (strong only). Default returns all."
+                    "description": "Minimum confidence level: 'moderate' (includes moderate+high) or 'high' (high only — 20+ timecards). Default returns all."
                 },
                 "has_actual_rate": {
                     "type": "boolean",
@@ -197,6 +196,30 @@ HEAVYJOB_TOOLS = [
                 },
             },
             "required": ["job_number"],
+        },
+    },
+    {
+        "name": "get_related_costcodes",
+        "description": (
+            "Get ALL active cost codes in the same discipline on a specific job. "
+            "Use AFTER finding matching cost codes to discover related work. "
+            "For example, 'pipe install' on a job might also have fuse, dig/lay/backfill, "
+            "bedding, testing codes in the same discipline. This finds the full scope picture. "
+            "Always use this when answering scope-of-work questions to show ALL relevant codes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_number": {
+                    "type": "string",
+                    "description": "Job number to search. Example: '8553'"
+                },
+                "discipline": {
+                    "type": "string",
+                    "description": "Discipline to filter by (from initial search results). Example: 'mechanical_piping', 'earthwork'"
+                },
+            },
+            "required": ["job_number", "discipline"],
         },
     },
 ]
@@ -374,14 +397,17 @@ def _search_heavyjob_costcodes(description=None, code=None, job_number=None,
 def _search_rate_items(description=None, discipline=None, job_number=None,
                        min_confidence=None, has_actual_rate=False, unit=None,
                        limit=50):
-    """Search rate_item table for calculated MH/unit rates."""
+    """Search rate_item table for field intelligence rates."""
     conn = get_connection()
     try:
         sql = """
             SELECT ri.activity, ri.description, ri.discipline, ri.unit,
-                   ri.bgt_mh_per_unit, ri.act_mh_per_unit, ri.rec_rate, ri.rec_basis,
-                   ri.qty_budget, ri.qty_actual, ri.confidence, ri.confidence_reason,
-                   ri.variance_pct, ri.variance_flag,
+                   ri.act_mh_per_unit, ri.act_cost_per_unit,
+                   ri.timecard_count, ri.work_days, ri.crew_size_avg,
+                   ri.daily_qty_avg, ri.daily_qty_peak,
+                   ri.total_hours, ri.total_qty,
+                   ri.total_labor_cost, ri.total_equip_cost,
+                   ri.confidence, ri.confidence_reason, ri.crew_breakdown,
                    j.job_number, j.name as job_name
             FROM rate_item ri
             JOIN rate_card rc ON ri.card_id = rc.card_id
@@ -399,17 +425,17 @@ def _search_rate_items(description=None, discipline=None, job_number=None,
         if job_number:
             sql += " AND j.job_number = ?"
             params.append(job_number)
-        if min_confidence == "strong":
-            sql += " AND ri.confidence = 'strong'"
+        if min_confidence == "high":
+            sql += " AND ri.confidence = 'high'"
         elif min_confidence == "moderate":
-            sql += " AND ri.confidence IN ('strong', 'moderate')"
+            sql += " AND ri.confidence IN ('high', 'moderate')"
         if has_actual_rate:
             sql += " AND ri.act_mh_per_unit > 0"
         if unit:
             sql += " AND ri.unit LIKE ?"
             params.append(f"%{unit}%")
 
-        sql += f" ORDER BY ri.confidence DESC, ri.act_mh_per_unit DESC NULLS LAST LIMIT {limit}"
+        sql += f" ORDER BY ri.timecard_count DESC, ri.act_mh_per_unit DESC NULLS LAST LIMIT {limit}"
 
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
@@ -595,6 +621,38 @@ def _get_crew_data(job_number, cost_code=None, description=None):
         conn.close()
 
 
+def _get_related_costcodes(job_number, discipline, limit=30):
+    """Get all active cost codes in the same discipline on a job."""
+    conn = get_connection()
+    try:
+        job = conn.execute(
+            "SELECT job_id FROM job WHERE job_number = ?", (job_number,)
+        ).fetchone()
+        if not job:
+            return {"error": f"Job {job_number} not found"}
+
+        rows = conn.execute("""
+            SELECT cc.code, cc.description, cc.unit, cc.discipline,
+                   cc.act_labor_hrs, cc.act_qty,
+                   CASE WHEN cc.act_qty > 0 AND cc.act_labor_hrs > 0
+                        THEN ROUND(cc.act_labor_hrs / cc.act_qty, 4) END as act_mh_per_unit,
+                   (SELECT COUNT(*) FROM hj_timecard
+                    WHERE job_id = cc.job_id AND cost_code = cc.code) as timecard_count
+            FROM hj_costcode cc
+            WHERE cc.job_id = ? AND cc.discipline LIKE ? AND cc.act_labor_hrs > 0
+            ORDER BY cc.act_labor_hrs DESC
+            LIMIT ?
+        """, (job["job_id"], f"%{discipline}%", limit)).fetchall()
+
+        return {
+            "job_number": job_number,
+            "discipline": discipline,
+            "cost_codes": [dict(r) for r in rows],
+        }
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Tool Function Map
 # ---------------------------------------------------------------------------
@@ -607,6 +665,7 @@ TOOL_FUNCTIONS = {
     "list_jobs": _list_jobs,
     "aggregate_rates_across_jobs": _aggregate_rates_across_jobs,
     "get_crew_data": _get_crew_data,
+    "get_related_costcodes": _get_related_costcodes,
     # JCD tools (legacy, Job 8553)
     "search_unit_costs": query.search_unit_costs,
     "search_material_costs": query.search_material_costs,
@@ -635,69 +694,50 @@ def execute_tool(name: str, input_args: dict) -> str:
 # System Prompt
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are WEIS (Wollam Estimating Intelligence System) — a senior estimating intelligence assistant for Wollam Construction, a Utah-based industrial heavy civil contractor.
+SYSTEM_PROMPT = """You are WEIS (Wollam Estimating Intelligence System) — a senior estimating assistant for Wollam Construction, a Utah-based industrial heavy civil contractor.
 
-You behave like a senior estimator with perfect recall of company history. Your role is decision support — you help estimators access historical data, production rates, and institutional knowledge quickly and accurately.
+You behave like a senior estimator with perfect recall of company history. You're talking to experienced estimators who manage projects — they know the work, they know the terminology. Respect their time.
 
-## Identity & Philosophy
+## How to Respond
 
-- **Evidence first**: Every answer is supported by historical data. Prefer sample sizes, ranges, and averages over speculation.
-- **Transparency**: Explain what data you used, how many examples you found, what filters you applied, and what assumptions you made.
-- **Conservative interpretation**: When recommending rates, highlight variance, flag optimistic assumptions, and identify risk conditions. Better to be cautiously accurate than optimistically wrong.
-- **Minimal friction**: Estimators ask questions naturally. Infer context. Don't make them learn a query language.
-- **Never guess**: If the data doesn't support an answer, say so clearly. "I don't have sufficient data" is always better than a hallucinated rate.
+**When answering rate/cost questions, ALWAYS start with a table:**
+
+| Job # | Job Name | Cost Code | Description | MH/Unit | $/Unit |
+|-------|----------|-----------|-------------|---------|--------|
+
+Show ALL matching cost codes — one row per cost code per job. Sort by timecard count (most data first). Only include rows that have actual data. After the table, add 1-2 lines of context: confidence levels, range, anything notable. End with a short prompt offering more depth.
+
+**IMPORTANT — Related cost codes:** When someone asks about a scope of work (e.g., "install 30in HDPE pipe"), that work often spans MULTIPLE cost codes on the same job (fuse, dig/lay/backfill, bedding, testing, etc.). After finding matching codes, also search for other active cost codes in the same discipline on those jobs. Show all related codes in the table so the estimator sees the full picture.
+
+**Keep it concise.** The table IS the answer. Below it, add brief context only — confidence notes, range summary, anything the estimator should know. No headers like ### Answer or ### Evidence.
+
+**Progressive disclosure — offer, don't dump:**
+- First response: table + brief context. That's it.
+- If they ask about a specific job: give that job's detail, crew, production profile.
+- If they ask about risks or lessons: then share lessons learned, gotchas.
+- Always end with a brief nudge: "Want crew breakdown on 8553?" or "I have lessons learned on this scope — interested?"
+
+**When you DON'T have data:** Say so in one line. Don't pad with explanations about what you searched.
 
 ## Data Sources
 
-### Primary: HCSS HeavyJob (197 jobs, 15,000+ cost codes, 221,000+ timecard rows)
-This is actual field performance data — real hours, real quantities, real crew data from completed and active projects. The most valuable data for estimating.
+**Primary: HCSS HeavyJob** — actual field performance from 197 jobs. Real hours, quantities, crew data from timecards. Key metrics: MH/unit (hours per unit) and $/unit (labor + equipment cost per unit).
 
-Key metric: **act_mh_per_unit** (actual man-hours per unit) — this withstands cost inflation and is the most reliable estimating benchmark.
+**Secondary: Job Cost Data** — detailed unit costs, materials, subs, lessons learned from Job 8553.
 
-### Secondary: Job Cost Data Reports (Job 8553 — RTK SPD Pump Station)
-Detailed unit costs, material costs, subcontractor records, crew configurations, lessons learned from manual JCD analysis. Richer detail but limited to one project.
-
-### Bid Documents
-Uploaded RFPs, specs, addenda for active bids. Use when asked about bid scope or requirements.
-
-## Response Structure
-
-EVERY response must follow this structure. Use markdown headers:
-
-### Answer
-Lead with the direct answer. Include the rate/cost with units. Be specific and actionable.
-
-### Evidence
-- Data source(s) used (which tool, which table)
-- Number of data points / sample size
-- Job numbers referenced
-- Filters applied
-
-### Assumptions
-- What you assumed about the question
-- Any context you inferred
-- Limitations of the data (e.g., "only 3 jobs had this cost code")
-
-### Risk Considerations
-- Variance in the data (high spread = more risk)
-- Conditions that could change the rate (site access, weather, crew experience)
-- Whether the rate is conservative, aggressive, or middle-of-road
-
-### Next Steps
-Suggest 1-2 follow-up questions or analyses that would help refine the answer. Keep it practical.
+**Bid Documents** — uploaded RFPs, specs, addenda for active bids.
 
 ## Rules
 
-1. ALWAYS use tools to query data before answering. Never rely on memory.
-2. ALWAYS cite job numbers and cost codes when referencing specific data.
-3. Use `aggregate_rates_across_jobs` for benchmark/recommendation questions — it gives you statistical summaries across all jobs.
-4. Use `search_heavyjob_costcodes` for specific lookups and drill-downs.
-5. Use `search_rate_items` when the user wants calculated MH/unit rates with confidence levels.
-6. Distinguish between BUDGET rates (what was estimated) and ACTUAL rates (what was achieved in the field).
-7. When giving rates, ALWAYS include the unit (MH/SF, MH/CY, MH/LF, etc.).
-8. If a tool returns empty results, try ONE broader search. After that, conclude the data doesn't exist.
-9. For dollar-per-unit questions, check BOTH unit_costs AND subcontractors — subs often have the $/unit pricing.
-10. Keep the Answer section concise. Put detail in Evidence and Risk sections.
+1. ALWAYS query data with tools before answering. Never guess rates.
+2. Cite job numbers inline when referencing data.
+3. Use `aggregate_rates_across_jobs` for benchmark questions ("what's typical MH/unit for X").
+4. Use `search_heavyjob_costcodes` for specific lookups.
+5. Use `search_rate_items` for calculated rates with confidence levels.
+6. ALWAYS include units (MH/SF, MH/CY, MH/LF, $/LF, etc.).
+7. If a search returns nothing, try ONE broader search. Then say the data doesn't exist.
+8. Responses should rarely exceed 150 words unless the estimator asks for detail or the question requires a comparison table.
+9. Don't repeat what the estimator already said back to them. They know what they asked.
 """
 
 
@@ -786,7 +826,7 @@ class QueryEngine:
 
             response = self.client.messages.create(
                 model=MODEL,
-                max_tokens=4096,
+                max_tokens=1024,
                 system=system_prompt,
                 tools=round_tools or None,
                 messages=self.conversation,
@@ -944,7 +984,7 @@ class BidChatEngine:
 
             response = self.client.messages.create(
                 model=MODEL,
-                max_tokens=4096,
+                max_tokens=1024,
                 system=system_prompt,
                 tools=round_tools or None,
                 messages=self.conversation,
