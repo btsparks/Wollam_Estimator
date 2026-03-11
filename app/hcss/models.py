@@ -218,11 +218,14 @@ class HJTimeCard(BaseModel):
     tc_date: Optional[str] = None              # ISO date string (YYYY-MM-DD)
     employeeId: Optional[str] = None
     employeeName: Optional[str] = None
-    employeeCode: Optional[str] = None         # Trade code (e.g., OE4 = operator)
+    employeeCode: Optional[str] = None         # Employee code (typically name in HCSS)
+    payClassCode: Optional[str] = None         # Trade code (e.g., FORE, OPR1, LAB1)
+    payClassDesc: Optional[str] = None         # Trade description (e.g., Foreman, Operator)
     hours: Optional[float] = None              # Total hours (regular + OT + DOT)
     equipmentId: Optional[str] = None
     equipmentHours: Optional[float] = None
     foremanId: Optional[str] = None
+    foremanName: Optional[str] = None          # Foreman description from timecard
     status: Optional[str] = None               # 'Approved', 'Pending'
     quantity: Optional[float] = None           # Production quantity that day
 

@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "1.7"
+SCHEMA_VERSION = "1.9"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -661,6 +661,141 @@ def _migrate_1_6_to_1_7(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '1.7'")
 
 
+def _migrate_1_7_to_1_8(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.7 to 1.8: employees, pay items, forecasts, E360 timecards.
+
+    New tables for data discovered via HCSS API endpoint probing (2026-03-09):
+    1. hj_employee — full employee roster with trade codes
+    2. hj_pay_item — contract pay items with quantities, prices, linked cost codes
+    3. hj_forecast — job-level financial forecasts
+    4. e360_timecard — equipment mechanic timecards (maintenance hours)
+    """
+    conn.executescript("""
+    -- Employee roster from HeavyJob /api/v1/employees
+    CREATE TABLE IF NOT EXISTS hj_employee (
+        employee_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_id         TEXT UNIQUE,
+        code            TEXT,
+        first_name      TEXT,
+        last_name       TEXT,
+        middle_initial  TEXT,
+        suffix          TEXT,
+        nick_name       TEXT,
+        email           TEXT,
+        phone           TEXT,
+        is_salaried     BOOLEAN DEFAULT FALSE,
+        is_active       BOOLEAN DEFAULT TRUE,
+        is_deleted      BOOLEAN DEFAULT FALSE,
+        synced_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hj_employee_code ON hj_employee(code);
+    CREATE INDEX IF NOT EXISTS idx_hj_employee_active ON hj_employee(is_active);
+
+    -- Pay items from HeavyJob /api/v1/payItems
+    CREATE TABLE IF NOT EXISTS hj_pay_item (
+        pay_item_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_id         TEXT,
+        job_id          INTEGER REFERENCES job(job_id),
+        hcss_job_id     TEXT,
+        pay_item        TEXT,
+        description     TEXT,
+        status          TEXT,
+        owner_code      TEXT,
+        contract_qty    REAL,
+        unit            TEXT,
+        unit_price      REAL,
+        stop_overruns   BOOLEAN DEFAULT FALSE,
+        linked_cost_codes TEXT,
+        is_deleted      BOOLEAN DEFAULT FALSE,
+        synced_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hj_pay_item_job ON hj_pay_item(job_id);
+    CREATE INDEX IF NOT EXISTS idx_hj_pay_item_hcss_job ON hj_pay_item(hcss_job_id);
+
+    -- Job forecasts from HeavyJob /api/v1/forecasts
+    CREATE TABLE IF NOT EXISTS hj_forecast (
+        forecast_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_id         TEXT,
+        hcss_forecast_id TEXT,
+        job_id          INTEGER REFERENCES job(job_id),
+        job_code        TEXT,
+        job_description TEXT,
+        job_status      TEXT,
+        forecast_date   DATE,
+        forecast_status TEXT,
+        to_date_total_cost   REAL,
+        cost_to_completion   REAL,
+        cost_at_completion   REAL,
+        budget_total         REAL,
+        variance             REAL,
+        contract_revenue     REAL,
+        to_date_revenue      REAL,
+        revenue_to_completion REAL,
+        forecast_revenue     REAL,
+        margin_percent       REAL,
+        markup_percent       REAL,
+        create_date          DATETIME,
+        synced_at            DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hj_forecast_job ON hj_forecast(job_id);
+    CREATE INDEX IF NOT EXISTS idx_hj_forecast_job_code ON hj_forecast(job_code);
+
+    -- E360 equipment mechanic timecards from /api/v2/timecards
+    CREATE TABLE IF NOT EXISTS e360_timecard (
+        entry_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_id         TEXT,
+        timecard_id     INTEGER,
+        timecard_date   DATE,
+        mechanic_id     INTEGER,
+        mechanic_code   TEXT,
+        payclass        TEXT,
+        status          TEXT,
+        approval_level1 TEXT,
+        equipment_name  TEXT,
+        equipment_code  TEXT,
+        work_type       TEXT,
+        work_code       TEXT,
+        item_code       TEXT,
+        regular_hours   REAL,
+        overtime_hours  REAL,
+        double_time_hours REAL,
+        damage_related  BOOLEAN DEFAULT FALSE,
+        on_site         BOOLEAN DEFAULT FALSE,
+        synced_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_e360_tc_date ON e360_timecard(timecard_date);
+    CREATE INDEX IF NOT EXISTS idx_e360_tc_equip ON e360_timecard(equipment_name);
+    CREATE INDEX IF NOT EXISTS idx_e360_tc_mechanic ON e360_timecard(mechanic_code);
+    """)
+
+    conn.execute("UPDATE schema_version SET version = '1.8'")
+
+
+def _migrate_1_8_to_1_9(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 1.8 to 1.9: add trade code + foreman name to timecards.
+
+    New columns on hj_timecard:
+    1. pay_class_code — trade code (FORE, OPR1, LAB1) from payClassCode
+    2. pay_class_desc — trade description (Foreman, Operator) from payClassDescription
+    3. foreman_name — foreman description from foremanDescription
+    """
+    for col_sql in [
+        "ALTER TABLE hj_timecard ADD COLUMN pay_class_code TEXT",
+        "ALTER TABLE hj_timecard ADD COLUMN pay_class_desc TEXT",
+        "ALTER TABLE hj_timecard ADD COLUMN foreman_name TEXT",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    conn.execute("UPDATE schema_version SET version = '1.9'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -699,6 +834,12 @@ def init_db(db_path: Path = None) -> None:
                 current = "1.6"
             if current == "1.6":
                 _migrate_1_6_to_1_7(conn)
+                current = "1.7"
+            if current == "1.7":
+                _migrate_1_7_to_1_8(conn)
+                current = "1.8"
+            if current == "1.8":
+                _migrate_1_8_to_1_9(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

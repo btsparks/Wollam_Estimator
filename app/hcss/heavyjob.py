@@ -173,6 +173,7 @@ def _flatten_timecard(detail: dict) -> list[HJTimeCard]:
     tc_date_raw = detail.get("date")
     tc_date = tc_date_raw[:10] if tc_date_raw else None
     foreman_id = detail.get("foremanId")
+    foreman_name = detail.get("foremanDescription")
     is_approved = detail.get("isApproved", False)
     status = "Approved" if is_approved else "Pending"
 
@@ -189,7 +190,9 @@ def _flatten_timecard(detail: dict) -> list[HJTimeCard]:
     for emp in employees:
         emp_id = emp.get("employeeId")
         emp_name = emp.get("employeeDescription") or emp.get("employeeCode")
-        emp_code = emp.get("employeeCode")  # Trade code (e.g., OE4)
+        emp_code = emp.get("employeeCode")
+        pay_class_code = emp.get("payClassCode")    # FORE, OPR1, LAB1, etc.
+        pay_class_desc = emp.get("payClassDescription")  # Foreman, Operator, Laborer
 
         # Collect hours by timeCardCostCodeId
         hours_by_cc: dict[str, float] = {}
@@ -217,8 +220,11 @@ def _flatten_timecard(detail: dict) -> list[HJTimeCard]:
                 employeeId=emp_id,
                 employeeName=emp_name,
                 employeeCode=emp_code,
+                payClassCode=pay_class_code,
+                payClassDesc=pay_class_desc,
                 hours=total_hours,
                 foremanId=foreman_id,
+                foremanName=foreman_name,
                 status=status,
                 quantity=cc_info.get("quantity"),
             ))
@@ -254,17 +260,22 @@ def _flatten_equipment(detail: dict) -> list[HJEquipmentEntry]:
         equip_code = equip.get("equipmentCode")
         equip_desc = equip.get("equipmentDescription") or equip_code
 
-        # Collect hours by timeCardCostCodeId
+        # Equipment uses totalHours (not regularHours/overtimeHours like employees)
         hours_by_cc: dict[str, float] = {}
-        for entry in equip.get("regularHours", []):
+        for entry in equip.get("totalHours", []):
             cc_id = entry.get("timeCardCostCodeId")
             hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
-        for entry in equip.get("overtimeHours", []):
-            cc_id = entry.get("timeCardCostCodeId")
-            hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
-        for entry in equip.get("doubleOvertimeHours", []):
-            cc_id = entry.get("timeCardCostCodeId")
-            hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
+        # Fallback: some timecards may still use the old structure
+        if not hours_by_cc:
+            for entry in equip.get("regularHours", []):
+                cc_id = entry.get("timeCardCostCodeId")
+                hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
+            for entry in equip.get("overtimeHours", []):
+                cc_id = entry.get("timeCardCostCodeId")
+                hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
+            for entry in equip.get("doubleOvertimeHours", []):
+                cc_id = entry.get("timeCardCostCodeId")
+                hours_by_cc[cc_id] = hours_by_cc.get(cc_id, 0) + (entry.get("hours") or 0)
 
         for tc_cc_id, total_hours in hours_by_cc.items():
             if total_hours == 0:

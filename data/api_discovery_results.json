@@ -1,0 +1,501 @@
+{
+  "hj_businessUnits": {
+    "status": "ok",
+    "count": 1,
+    "fields": [
+      "id",
+      "credentialsId",
+      "code",
+      "description"
+    ],
+    "sample": {
+      "id": "319078ad-cbfe-49e7-a8b4-b62fe0be273d",
+      "credentialsId": "676b8459-9f80-4f55-a585-9fba269ef085",
+      "code": "MANAGER",
+      "description": "Wollam Construction"
+    }
+  },
+  "hj_jobs": {
+    "status": "ok",
+    "count": 265,
+    "fields": [
+      "id",
+      "legacyId",
+      "code",
+      "description",
+      "createdDate",
+      "payItemSetupType",
+      "businessUnitId",
+      "status",
+      "isDeleted",
+      "startofpayweek",
+      "relatedEstimateCodes"
+    ],
+    "sample": {
+      "id": "18e74a74-630b-4895-a443-24a539a283c7",
+      "legacyId": "64ad8182-3e53-48de-bbce-e572fc9205fd",
+      "code": "1",
+      "description": "1 - General Overhead",
+      "createdDate": "2018-01-02T20:10:31.0713064",
+      "payItemSetupType": "costCodeDriven",
+      "businessUnitId": "319078ad-cbfe-49e7-a8b4-b62fe0be273d",
+      "status": "inactive",
+      "isDeleted": false,
+      "startofpayweek": "monday",
+      "relatedEstimateCodes": [
+        ""
+      ]
+    }
+  },
+  "hj_employees": {
+    "status": "ok",
+    "count": 1000,
+    "fields": [
+      "Id",
+      "otherPhone",
+      "isDeleted",
+      "code",
+      "firstName",
+      "middleInitial",
+      "lastName",
+      "suffix",
+      "nickName",
+      "email",
+      "isSalaried",
+      "isActive"
+    ],
+    "sample": {
+      "Id": "a08f80ba-e2a8-433a-ad29-060b71402e05",
+      "otherPhone": "602-341-0135",
+      "isDeleted": false,
+      "code": "WRIGHT, TREY",
+      "firstName": "Wright",
+      "middleInitial": "",
+      "lastName": "Trey",
+      "suffix": "",
+      "nickName": "",
+      "email": "",
+      "isSalaried": false,
+      "isActive": true
+    }
+  },
+  "hj_/api/v1/equipment": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/equipments": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/payClasses": {
+    "status": "forbidden"
+  },
+  "hj_/api/v1/payclasses": {
+    "status": "forbidden"
+  },
+  "hj_payItems": {
+    "status": "ok",
+    "count": 1000,
+    "fields": [
+      "id",
+      "jobId",
+      "payItem",
+      "description",
+      "status",
+      "ownerCode",
+      "contractQuantity",
+      "unitOfMeasure",
+      "unitPrice",
+      "stopOverruns",
+      "linkedCostCodes",
+      "isDeleted"
+    ],
+    "sample": {
+      "id": "eb634d85-37af-4d91-a81a-0012fbbb0ddf",
+      "jobId": "8662265d-114a-4877-af56-9d3319f2e9de",
+      "payItem": "600",
+      "description": "",
+      "status": "active",
+      "ownerCode": "",
+      "contractQuantity": 0.0,
+      "unitOfMeasure": "",
+      "unitPrice": 0.0,
+      "stopOverruns": false,
+      "linkedCostCodes": [],
+      "isDeleted": false
+    }
+  },
+  "hj_costCodes": {
+    "status": "ok",
+    "count": 45,
+    "fields": [
+      "code",
+      "description",
+      "businessUnitId",
+      "businessUnitCode",
+      "jobId",
+      "jobCode",
+      "isHiddenFromMobile",
+      "quantityDrivingEntityType",
+      "payItemFactor",
+      "isPayItemDriver",
+      "quantity",
+      "unitOfMeasure",
+      "status",
+      "historicalActivityCode",
+      "historicalBiditem"
+    ],
+    "sample": {
+      "code": "1025",
+      "description": "Site Equipment",
+      "businessUnitId": "319078ad-cbfe-49e7-a8b4-b62fe0be273d",
+      "businessUnitCode": "MANAGER",
+      "jobId": "03af0f3d-6c39-41e4-8630-2ab8ceec8e87",
+      "jobCode": "8528",
+      "isHiddenFromMobile": false,
+      "quantityDrivingEntityType": "none",
+      "payItemFactor": 1,
+      "isPayItemDriver": false,
+      "quantity": 1.0,
+      "unitOfMeasure": "MO",
+      "status": "active",
+      "historicalActivityCode": "1030",
+      "historicalBiditem": "",
+      "heavyBidEstimateCode": "",
+      "isCapExpected": true,
+      "isTm": false,
+      "workersCompId": "b88975be-e0e7-48fc-b752-48a25cc19752",
+      "workersCompCode": "WC01",
+      "workersCompDescription": "Standard Captive",
+      "laborHours": 0.0,
+      "equipmentHours": 1.0,
+      "laborDollars": 0.0,
+      "equipmentDollars": 1800.0,
+      "materialDollars": 0.0,
+      "subcontractDollars": 0.0,
+      "customCostTypeDollars": [],
+      "isDeleted": false,
+      "id": "25912378-e845-4eec-a6d4-142df9663157"
+    }
+  },
+  "hj_costCodeProgress": {
+    "status": "not_found"
+  },
+  "hj_timeCardInfo": {
+    "status": "ok",
+    "count": 111,
+    "fields": [
+      "id",
+      "foremanId",
+      "jobId",
+      "businessUnitId",
+      "date",
+      "revision",
+      "shift",
+      "lastModifiedDateTime",
+      "lastModifiedPreciseDateTime",
+      "lockedDateTime",
+      "isApproved"
+    ],
+    "sample": {
+      "id": "b931d307-f37f-4d5f-a7d6-34e33e8965b2",
+      "foremanId": "27a06af2-71dc-46b2-8c74-1d6cf15c6fd3",
+      "jobId": "03af0f3d-6c39-41e4-8630-2ab8ceec8e87",
+      "businessUnitId": "319078ad-cbfe-49e7-a8b4-b62fe0be273d",
+      "date": "2023-01-10",
+      "revision": 2,
+      "shift": 1,
+      "lastModifiedDateTime": "2023-01-20T21:34:05Z",
+      "lastModifiedPreciseDateTime": "2023-01-20T21:34:05Z",
+      "lockedDateTime": "2023-01-11T01:00:42Z",
+      "isApproved": false
+    }
+  },
+  "hj_forecasts": {
+    "status": "ok",
+    "count": 1,
+    "fields": [
+      "id",
+      "jobCode",
+      "jobDescription",
+      "jobStatus",
+      "forecastId",
+      "forecastDate",
+      "forecastStatus",
+      "toDateTotalCost",
+      "costToCompletion",
+      "costAtCompletion",
+      "budgetTotal",
+      "variance",
+      "createDate",
+      "contractRevenue",
+      "toDateRevenue"
+    ],
+    "sample": {
+      "id": "275d74d5-cc55-45c7-80b2-ad07feef54a6",
+      "jobCode": "8593",
+      "jobDescription": "Wear Heel Repair 2025",
+      "jobStatus": "active",
+      "forecastId": "55d0e6d4-b715-472a-a631-fb128cc7de8c",
+      "forecastDate": "2025-09-24T00:00:00",
+      "forecastStatus": "inProgress",
+      "toDateTotalCost": 147310.2,
+      "costToCompletion": 197297.94,
+      "costAtCompletion": 344608.15,
+      "budgetTotal": 465238.0,
+      "variance": 120629.85,
+      "createDate": "2025-09-23T13:58:49.8951986",
+      "contractRevenue": 0.0,
+      "toDateRevenue": 0.0,
+      "revenueToCompletion": 0.0,
+      "forecastRevenue": 0.0,
+      "marginPercent": 0,
+      "markupPercent": -100,
+      "syncTimestamp": "2025-09-23T13:58:50.5627127"
+    }
+  },
+  "hj_forecasts_job": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/changeOrders": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/changeOrders_bu": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/changeorders": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/changeorders_bu": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/materials_job": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/materialEntries_job": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/subcontracts_job": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/subcontractors_job": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/dailyDiaries": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/dailies": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/diaries": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/tags": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/notes": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/jobNotes": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/quantities": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/installedQuantities": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/safety": {
+    "status": "not_found"
+  },
+  "hj_/api/v1/incidents": {
+    "status": "not_found"
+  },
+  "hb_businessunits": {
+    "status": "not_found"
+  },
+  "hb_estimates": {
+    "status": "not_found"
+  },
+  "hb_biditems": {
+    "status": "not_found"
+  },
+  "hb_activities": {
+    "status": "not_found"
+  },
+  "hb_resources": {
+    "status": "not_found"
+  },
+  "hb_materials": {
+    "status": "not_found"
+  },
+  "hb_activityCodebook": {
+    "status": "not_found"
+  },
+  "hb_materialCodebook": {
+    "status": "not_found"
+  },
+  "e360_timecards": {
+    "status": "ok",
+    "count": 100,
+    "fields": [
+      "id",
+      "timeCardId",
+      "timeCardDate",
+      "mechanicId",
+      "mechanicCode",
+      "mechanicAccountingCode",
+      "payclass",
+      "payclassAccountingCode",
+      "status",
+      "approvalLevel1",
+      "approvalLevel2",
+      "approvalLevel3",
+      "approvalStatusBy",
+      "certified",
+      "signed"
+    ],
+    "sample": {
+      "id": "d19b540e-4455-47cf-b258-8d76d1fb5e16",
+      "timeCardId": 1,
+      "timeCardDate": "2019-03-14T06:00:00Z",
+      "mechanicId": 1,
+      "mechanicCode": "7587",
+      "mechanicAccountingCode": "",
+      "payclass": "Mechanic",
+      "payclassAccountingCode": "",
+      "status": "Exported",
+      "approvalLevel1": "Approved",
+      "approvalLevel2": "N/A",
+      "approvalLevel3": "N/A",
+      "approvalStatusBy": "Erickson, Tresa",
+      "certified": false,
+      "signed": false,
+      "revision": 1,
+      "originatedFromSystem": 1,
+      "businessUnitId": "3d2ab2ae-8632-444e-90db-619628ecfd62",
+      "details": [
+        {
+          "id": "6f73d967-ae12-400a-af1b-cae51e98b33d",
+          "workRequestId": 2,
+          "date": "2019-03-14T06:00:00Z",
+          "entityTypeId": 0,
+          "entityId": 301,
+          "workType": "Equipment",
+          "equipmentName": "12-19",
+          "equipmentAccountingCode": "12-19",
+          "workCode": "Minor Repairs",
+          "workCodeCostCode": "200",
+          "itemCode": "Attachment",
+          "itemCodeCostCode": "",
+          "billingTypeId": 0,
+          "billingType": "Equipment",
+          "billingId": 301,
+          "billingName": "12-19",
+          "overrideCostCode": "",
+          "damageRelated": true,
+          "onSite": false,
+          "isTravelTime": false,
+          "regularHours": 5.0,
+          "overtimeHours": 0.0,
+          "doubleTimeHours": 0.0,
+          "payClass": "Mechanic",
+          "voided": false,
+          "revision": 2,
+          "originatedFromSystem": 1,
+          "lastModifiedDate": "0001-01-01T00:00:00"
+        },
+        {
+          "id": "7f157ba6-7581-497e-9b23-4a9c37589759",
+          "workRequestId": 3,
+          "date": "2019-03-14T06:00:00Z",
+          "entityTypeId": 0,
+          "entityId": 389,
+          "workType": "Equipment",
+          "equipmentName": "16-25",
+          "equipmentAccountingCode": "16-25",
+          "workCode": "Minor Repairs",
+          "workCodeCostCode": "200",
+          "itemCode": "Fuel System",
+          "itemCodeCostCode": "",
+          "billingTypeId": 0,
+          "billingType": "Equipment",
+          "billingId": 389,
+          "billingName": "16-25",
+          "overrideCostCode": "",
+          "damageRelated": true,
+          "onSite": false,
+          "isTravelTime": false,
+          "regularHours": 3.0,
+          "overtimeHours": 0.0,
+          "doubleTimeHours": 0.0,
+          "payClass": "Mechanic",
+          "voided": false,
+          "revision": 2,
+          "originatedFromSystem": 1,
+          "lastModifiedDate": "0001-01-01T00:00:00"
+        },
+        {
+          "id": "783c850e-d2ce-4495-a9e8-28095ad9a4f1",
+          "workRequestId": 4,
+          "date": "2019-03-14T06:00:00Z",
+          "entityTypeId": 0,
+          "entityId": 331,
+          "workType": "Equipment",
+          "equipmentName": "13-08",
+          "equipmentAccountingCode": "13-08",
+          "workCode": "Minor Repairs",
+          "workCodeCostCode": "200",
+          "itemCode": "Tires",
+          "itemCodeCostCode": "",
+          "billingTypeId": 0,
+          "billingType": "Equipment",
+          "billingId": 331,
+          "billingName": "13-08",
+          "overrideCostCode": "",
+          "damageRelated": false,
+          "onSite": false,
+          "isTravelTime": false,
+          "regularHours": 2.0,
+          "overtimeHours": 0.0,
+          "doubleTimeHours": 0.0,
+          "payClass": "Mechanic",
+          "voided": false,
+          "revision": 1,
+          "originatedFromSystem": 1,
+          "lastModifiedDate": "0001-01-01T00:00:00"
+        }
+      ],
+      "payAdjustments": [],
+      "lastModifiedDate": "0001-01-01T00:00:00"
+    }
+  },
+  "e360_/api/v2/equipment": {
+    "status": "not_found"
+  },
+  "e360_/api/v1/equipment": {
+    "status": "http_400"
+  },
+  "e360_/api/v2/workOrders": {
+    "status": "not_found"
+  },
+  "e360_/api/v2/workorders": {
+    "status": "not_found"
+  },
+  "setups_/api/v1/businessUnits": {
+    "status": "not_found"
+  },
+  "setups_/api/v1/employees": {
+    "status": "not_found"
+  },
+  "setups_/api/v1/equipment": {
+    "status": "not_found"
+  },
+  "setups_/api/v1/costCodes": {
+    "status": "not_found"
+  },
+  "setups_/api/v1/payClasses": {
+    "status": "not_found"
+  },
+  "setups_/api/v1/tags": {
+    "status": "not_found"
+  }
+}

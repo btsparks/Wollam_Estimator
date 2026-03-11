@@ -175,16 +175,18 @@ def upsert_timecards(timecards: list[HJTimeCard], job_id: int) -> int:
             conn.execute(
                 """INSERT INTO hj_timecard (
                        hcss_tc_id, job_id, cost_code, date,
-                       employee_id, employee_name, hours,
+                       employee_id, employee_name, employee_code, hours,
                        equip_id, equip_hours, foreman_id,
-                       status, quantity)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       status, quantity,
+                       pay_class_code, pay_class_desc, foreman_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tc.id, job_id, tc.costCode,
                     tc.tc_date,
-                    tc.employeeId, tc.employeeName, tc.hours,
+                    tc.employeeId, tc.employeeName, tc.employeeCode, tc.hours,
                     tc.equipmentId, tc.equipmentHours, tc.foremanId,
                     tc.status, tc.quantity,
+                    tc.payClassCode, tc.payClassDesc, tc.foremanName,
                 ),
             )
             count += 1
