@@ -1,0 +1,26 @@
+# WEIS v2 — Wollam Estimating Intelligence System
+# Minimal, focused dependencies
+
+# Backend Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# AI / LLM
+anthropic>=0.39.0
+
+# HCSS API Integration (carried over)
+httpx>=0.25.0
+pydantic>=2.0.0
+pyyaml>=6.0
+
+# Document extraction
+pdfplumber>=0.10.0
+openpyxl>=3.1.0
+python-multipart>=0.0.6
+
+# Environment
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
