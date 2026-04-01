@@ -11,7 +11,14 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DB_PATH = Path(os.getenv("WEIS_DB_PATH", PROJECT_ROOT / "data" / "db" / "weis.db"))
 STATIC_DIR = PROJECT_ROOT / "static"
 DIARY_DIR = PROJECT_ROOT / "Heavy Job Notes"
+COST_REPORT_DIR = PROJECT_ROOT / "Heavy Job Cost Report"
 DOCUMENTS_DIR = PROJECT_ROOT / "data" / "documents"
+
+# Dropbox (read-only document source)
+DROPBOX_ROOT = Path(os.getenv(
+    "WEIS_DROPBOX_ROOT",
+    r"C:\Users\Travis Sparks\Dropbox (Wollam)"
+))
 
 # API Keys
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

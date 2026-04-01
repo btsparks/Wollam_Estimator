@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.3"
+SCHEMA_VERSION = "2.7"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -974,6 +974,279 @@ def _migrate_2_2_to_2_3(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.3'")
 
 
+def _migrate_2_3_to_2_4(conn: sqlite3.Connection) -> None:
+    """Add cost report ground truth columns to hj_costcode.
+
+    The HCSS timecard sync is known to return incomplete data for large/old jobs.
+    Cost report values imported from HeavyJob Cost Analysis exports serve as the
+    authoritative source of truth for actual hours, quantities, and costs.
+    """
+    cols = [
+        "ALTER TABLE hj_costcode ADD COLUMN rpt_placed_qty REAL",
+        "ALTER TABLE hj_costcode ADD COLUMN rpt_labor_cost REAL",
+        "ALTER TABLE hj_costcode ADD COLUMN rpt_equip_cost REAL",
+        "ALTER TABLE hj_costcode ADD COLUMN rpt_pct_complete REAL",
+        "ALTER TABLE hj_costcode ADD COLUMN rpt_imported_at TEXT",
+    ]
+    for sql in cols:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+    conn.execute("UPDATE schema_version SET version = '2.4'")
+
+
+def _migrate_2_4_to_2_5(conn: sqlite3.Connection) -> None:
+    """Add notes column to hj_timecard for cost code privateNotes from API."""
+    try:
+        conn.execute("ALTER TABLE hj_timecard ADD COLUMN notes TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    conn.execute("UPDATE schema_version SET version = '2.5'")
+
+
+def _migrate_2_5_to_2_6(conn: sqlite3.Connection) -> None:
+    """Add Dropbox document inventory and extraction tables."""
+    conn.executescript("""
+    -- Document inventory from Dropbox scan
+    CREATE TABLE IF NOT EXISTS dropbox_document (
+        doc_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id      INTEGER REFERENCES job(job_id),
+        file_path   TEXT NOT NULL,
+        file_name   TEXT NOT NULL,
+        doc_category TEXT,
+        file_type   TEXT,
+        file_size   INTEGER,
+        modified_at TEXT,
+        scanned_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+        extracted   INTEGER DEFAULT 0,
+        UNIQUE(job_id, file_path)
+    );
+
+    -- Extracted structured data from documents
+    CREATE TABLE IF NOT EXISTS dropbox_extract (
+        extract_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_id       INTEGER REFERENCES dropbox_document(doc_id),
+        job_id       INTEGER,
+        extract_type TEXT,
+        cost_code    TEXT,
+        content_json TEXT,
+        extracted_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dbdoc_job ON dropbox_document(job_id);
+    CREATE INDEX IF NOT EXISTS idx_dbdoc_category ON dropbox_document(doc_category);
+    CREATE INDEX IF NOT EXISTS idx_dbext_job ON dropbox_extract(job_id);
+    CREATE INDEX IF NOT EXISTS idx_dbext_type ON dropbox_extract(extract_type);
+    CREATE INDEX IF NOT EXISTS idx_dbext_cc ON dropbox_extract(job_id, cost_code);
+    """)
+    conn.execute("UPDATE schema_version SET version = '2.6'")
+
+
+def _migrate_2_6_to_2_7(conn: sqlite3.Connection) -> None:
+    """Add HeavyBid Estimate Insights tables (replaces old placeholder tables)."""
+    conn.executescript("""
+    -- Drop old placeholder HB tables from earlier schema versions
+    DROP TABLE IF EXISTS hb_resource;
+    DROP TABLE IF EXISTS hb_activity;
+    DROP TABLE IF EXISTS hb_biditem;
+    DROP TABLE IF EXISTS hb_estimate;
+
+    -- HeavyBid estimates (one row per synced estimate)
+    CREATE TABLE IF NOT EXISTS hb_estimate (
+        estimate_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_est_id         TEXT NOT NULL UNIQUE,
+        bu_id               TEXT,
+        code                TEXT,
+        name                TEXT,
+        description         TEXT,
+        estimate_version    TEXT,
+        processed_status    INTEGER,
+        -- Filters (flattened from API nested object)
+        project_name        TEXT,
+        project_number      TEXT,
+        bid_date            TEXT,
+        start_date          TEXT,
+        created_date        TEXT,
+        modified_date       TEXT,
+        state               TEXT,
+        estimator           TEXT,
+        owner               TEXT,
+        type_of_work        TEXT,
+        -- Totals (flattened from API nested object)
+        total_labor         REAL,
+        total_burden        REAL,
+        total_perm_material REAL,
+        total_const_material REAL,
+        total_subcontract   REAL,
+        total_equip_oe      REAL,
+        total_company_equip REAL,
+        total_rented_equip  REAL,
+        total_equip         REAL,
+        total_entry_cost    REAL,
+        bid_total           REAL,
+        total_manhours      REAL,
+        bal_markup          REAL,
+        actual_markup       REAL,
+        total_cost_takeoff  REAL,
+        addon_bond_total    REAL,
+        job_duration        REAL,
+        -- Linking to HeavyJob
+        linked_job_number   TEXT,
+        linked_job_id       INTEGER REFERENCES job(job_id),
+        -- Meta
+        synced_at           TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hb_est_code ON hb_estimate(code);
+    CREATE INDEX IF NOT EXISTS idx_hb_est_job_num ON hb_estimate(linked_job_number);
+    CREATE INDEX IF NOT EXISTS idx_hb_est_job_id ON hb_estimate(linked_job_id);
+
+    -- HeavyBid bid items (pay items per estimate)
+    CREATE TABLE IF NOT EXISTS hb_biditem (
+        biditem_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_bi_id          TEXT NOT NULL,
+        estimate_id         INTEGER NOT NULL REFERENCES hb_estimate(estimate_id),
+        biditem_code        TEXT,
+        description         TEXT,
+        type                TEXT,
+        quantity            REAL,
+        bid_quantity        REAL,
+        units               TEXT,
+        bid_price           REAL,
+        -- Cost breakdown
+        labor               REAL,
+        burden              REAL,
+        perm_material       REAL,
+        const_material      REAL,
+        subcontract         REAL,
+        equip_oe            REAL,
+        company_equip       REAL,
+        rented_equip        REAL,
+        misc1               REAL,
+        misc2               REAL,
+        misc3               REAL,
+        direct_total        REAL,
+        indirect_total      REAL,
+        total_cost          REAL,
+        manhours            REAL,
+        markup              REAL,
+        total_takeoff       REAL,
+        total_balanced      REAL,
+        addon_bond          REAL,
+        -- Metadata
+        pricing_status      TEXT,
+        cost_notes          TEXT,
+        bid_notes           TEXT,
+        folder              TEXT,
+        review_flag         TEXT,
+        sort_code           TEXT,
+        synced_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(estimate_id, hcss_bi_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hb_bi_est ON hb_biditem(estimate_id);
+    CREATE INDEX IF NOT EXISTS idx_hb_bi_code ON hb_biditem(biditem_code);
+
+    -- HeavyBid activities (cost buildup per bid item)
+    CREATE TABLE IF NOT EXISTS hb_activity (
+        activity_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_act_id         TEXT NOT NULL,
+        estimate_id         INTEGER NOT NULL REFERENCES hb_estimate(estimate_id),
+        hcss_biditem_id     TEXT,
+        biditem_code        TEXT,
+        activity_code       TEXT,
+        description         TEXT,
+        quantity            REAL,
+        units               TEXT,
+        -- Production
+        production_type     TEXT,
+        production_rate     REAL,
+        hours_per_day       REAL,
+        crew                TEXT,
+        crew_hours          REAL,
+        crew_percent        REAL,
+        man_hours           REAL,
+        calculated_duration REAL,
+        efficient_percent   REAL,
+        -- Cost breakdown
+        labor               REAL,
+        burden              REAL,
+        perm_material       REAL,
+        const_material      REAL,
+        subcontract         REAL,
+        equip_oe            REAL,
+        company_equip       REAL,
+        rented_equip        REAL,
+        misc1               REAL,
+        misc2               REAL,
+        misc3               REAL,
+        direct_total        REAL,
+        crew_cost           REAL,
+        -- Estimator notes (critical context)
+        notes               TEXT,
+        -- Metadata
+        workers_comp_code   TEXT,
+        calendar            TEXT,
+        factorable          TEXT,
+        factor              REAL,
+        non_additive        TEXT,
+        -- HeavyJob mapping (from export, usually empty via API)
+        heavyjob_code       TEXT,
+        heavyjob_description TEXT,
+        heavyjob_quantity   REAL,
+        heavyjob_unit       TEXT,
+        -- Future manual mapping
+        mapped_costcode     TEXT,
+        synced_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(estimate_id, hcss_act_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hb_act_est ON hb_activity(estimate_id);
+    CREATE INDEX IF NOT EXISTS idx_hb_act_bi ON hb_activity(hcss_biditem_id);
+    CREATE INDEX IF NOT EXISTS idx_hb_act_code ON hb_activity(activity_code);
+    CREATE INDEX IF NOT EXISTS idx_hb_act_mapped ON hb_activity(mapped_costcode);
+
+    -- HeavyBid resources (crew/equipment/material line items per activity)
+    CREATE TABLE IF NOT EXISTS hb_resource (
+        resource_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        hcss_res_id         TEXT NOT NULL,
+        estimate_id         INTEGER NOT NULL REFERENCES hb_estimate(estimate_id),
+        hcss_biditem_id     TEXT,
+        hcss_activity_id    TEXT,
+        activity_code       TEXT,
+        biditem_code        TEXT,
+        resource_code       TEXT,
+        description         TEXT,
+        type_cost           TEXT,
+        sub_type            TEXT,
+        quantity            REAL,
+        units               TEXT,
+        percent             REAL,
+        unit_price          REAL,
+        currency            TEXT,
+        total               REAL,
+        pieces              REAL,
+        factorable          TEXT,
+        factor              REAL,
+        skip_cost           TEXT,
+        operating_percent   REAL,
+        rent_percent        REAL,
+        crew_code           TEXT,
+        equip_operator_code TEXT,
+        man_hour_unit       REAL,
+        synced_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(estimate_id, hcss_res_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hb_res_est ON hb_resource(estimate_id);
+    CREATE INDEX IF NOT EXISTS idx_hb_res_act ON hb_resource(hcss_activity_id);
+    CREATE INDEX IF NOT EXISTS idx_hb_res_code ON hb_resource(resource_code);
+    CREATE INDEX IF NOT EXISTS idx_hb_res_type ON hb_resource(type_cost);
+    """)
+    conn.execute("UPDATE schema_version SET version = '2.7'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1030,6 +1303,18 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.2"
             if current == "2.2":
                 _migrate_2_2_to_2_3(conn)
+                current = "2.3"
+            if current == "2.3":
+                _migrate_2_3_to_2_4(conn)
+                current = "2.4"
+            if current == "2.4":
+                _migrate_2_4_to_2_5(conn)
+                current = "2.5"
+            if current == "2.5":
+                _migrate_2_5_to_2_6(conn)
+                current = "2.6"
+            if current == "2.6":
+                _migrate_2_6_to_2_7(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

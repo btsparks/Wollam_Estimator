@@ -20,10 +20,14 @@ from datetime import datetime
 from typing import Any
 
 from app.database import get_connection
+import logging
+
 from app.hcss.models import (
     HBActivity,
     HBBidItem,
     HBEstimate,
+    HBEstimateFilters,
+    HBEstimateTotals,
     HBResource,
     HJChangeOrder,
     HJCostCode,
@@ -32,6 +36,8 @@ from app.hcss.models import (
     HJSubcontract,
     HJTimeCard,
 )
+
+logger = logging.getLogger(__name__)
 from app.transform.rate_card import RateCardResult, RateItemResult
 
 
@@ -272,28 +278,84 @@ def upsert_subcontracts(subs: list[HJSubcontract], job_id: int) -> int:
         conn.close()
 
 
-def upsert_estimate(estimate: HBEstimate, bu_id: int) -> int:
-    """Insert or update a HeavyBid estimate. Returns estimate_id."""
+def upsert_hb_estimate(estimate: HBEstimate, bu_id: str) -> int:
+    """Insert or update a HeavyBid estimate. Auto-links to HeavyJob by job number.
+    Returns the local estimate_id."""
+    import re
     conn = get_connection()
     try:
+        # Parse job number from estimate code (e.g. "8553-CO-WEIR" -> "8553")
+        linked_job_number = None
+        linked_job_id = None
+        if estimate.code:
+            m = re.match(r'^(\d+)', estimate.code)
+            if m:
+                linked_job_number = m.group(1)
+                row = conn.execute(
+                    "SELECT job_id FROM job WHERE job_number = ?",
+                    (linked_job_number,),
+                ).fetchone()
+                if row:
+                    linked_job_id = row["job_id"]
+                else:
+                    logger.warning(
+                        "Estimate %s: job number %s not found in HeavyJob",
+                        estimate.code, linked_job_number,
+                    )
+
+        # Extract flattened values from nested objects
+        f = estimate.filters or HBEstimateFilters()
+        t = estimate.totals or HBEstimateTotals()
+
         conn.execute(
             """INSERT INTO hb_estimate (
-                   hcss_est_id, name, description, bid_date,
-                   status, total_cost, total_price, bu_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   hcss_est_id, bu_id, code, name, description,
+                   estimate_version, processed_status,
+                   project_name, project_number, bid_date, start_date,
+                   created_date, modified_date, state, estimator, owner, type_of_work,
+                   total_labor, total_burden, total_perm_material, total_const_material,
+                   total_subcontract, total_equip_oe, total_company_equip, total_rented_equip,
+                   total_equip, total_entry_cost, bid_total, total_manhours,
+                   bal_markup, actual_markup, total_cost_takeoff, addon_bond_total, job_duration,
+                   linked_job_number, linked_job_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(hcss_est_id) DO UPDATE SET
-                   name = excluded.name,
-                   description = excluded.description,
-                   bid_date = excluded.bid_date,
-                   status = excluded.status,
-                   total_cost = excluded.total_cost,
-                   total_price = excluded.total_price,
-                   bu_id = excluded.bu_id""",
+                   bu_id=excluded.bu_id, code=excluded.code, name=excluded.name,
+                   description=excluded.description, estimate_version=excluded.estimate_version,
+                   processed_status=excluded.processed_status,
+                   project_name=excluded.project_name, project_number=excluded.project_number,
+                   bid_date=excluded.bid_date, start_date=excluded.start_date,
+                   created_date=excluded.created_date, modified_date=excluded.modified_date,
+                   state=excluded.state, estimator=excluded.estimator, owner=excluded.owner,
+                   type_of_work=excluded.type_of_work,
+                   total_labor=excluded.total_labor, total_burden=excluded.total_burden,
+                   total_perm_material=excluded.total_perm_material,
+                   total_const_material=excluded.total_const_material,
+                   total_subcontract=excluded.total_subcontract,
+                   total_equip_oe=excluded.total_equip_oe,
+                   total_company_equip=excluded.total_company_equip,
+                   total_rented_equip=excluded.total_rented_equip,
+                   total_equip=excluded.total_equip, total_entry_cost=excluded.total_entry_cost,
+                   bid_total=excluded.bid_total, total_manhours=excluded.total_manhours,
+                   bal_markup=excluded.bal_markup, actual_markup=excluded.actual_markup,
+                   total_cost_takeoff=excluded.total_cost_takeoff,
+                   addon_bond_total=excluded.addon_bond_total, job_duration=excluded.job_duration,
+                   linked_job_number=excluded.linked_job_number,
+                   linked_job_id=excluded.linked_job_id,
+                   synced_at=CURRENT_TIMESTAMP""",
             (
-                estimate.id, estimate.name, estimate.description,
-                str(estimate.bidDate) if estimate.bidDate else None,
-                estimate.status, estimate.totalCost, estimate.totalPrice,
-                bu_id,
+                estimate.id, bu_id, estimate.code, estimate.name, estimate.description,
+                estimate.estimateVersion, estimate.processedStatus,
+                f.projectName, f.projectNumber, f.bidDate, f.startDate,
+                f.createdDate, f.modifiedDate, f.state, f.estimator, f.owner, f.typeOfWork,
+                t.totalLabor_Total, t.burden_Total, t.permanentMaterial_Total,
+                t.constructionMaterial_Total, t.subcontract_Total,
+                t.equipmentOperatingExpense_Total, t.companyEquipment_Total,
+                t.rentedEquipment_Total, t.totalEqp_Total,
+                t.totalEntryCost_Bid_Total, t.bidTotal_Bid, t.manhours_Total,
+                t.balMarkup_Bid, t.actualMarkup_Bid, t.totalCost_Takeoff,
+                t.addonBondTotal, t.job_Duration,
+                linked_job_number, linked_job_id,
             ),
         )
         conn.commit()
@@ -306,20 +368,36 @@ def upsert_estimate(estimate: HBEstimate, bu_id: int) -> int:
         conn.close()
 
 
-def upsert_biditems(items: list[HBBidItem], estimate_id: int) -> int:
-    """Insert bid items for an estimate. Returns count inserted."""
+def upsert_hb_biditems(items: list[HBBidItem], estimate_id: int) -> int:
+    """Insert or replace bid items for an estimate. Returns count."""
     conn = get_connection()
     try:
+        # Clear existing bid items for re-sync
+        conn.execute("DELETE FROM hb_biditem WHERE estimate_id = ?", (estimate_id,))
         count = 0
         for item in items:
             conn.execute(
                 """INSERT INTO hb_biditem (
-                       hcss_bi_id, estimate_id, code, description,
-                       quantity, unit, total_cost, total_price)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       hcss_bi_id, estimate_id, biditem_code, description, type,
+                       quantity, bid_quantity, units, bid_price,
+                       labor, burden, perm_material, const_material,
+                       subcontract, equip_oe, company_equip, rented_equip,
+                       misc1, misc2, misc3, direct_total, indirect_total,
+                       total_cost, manhours, markup, total_takeoff, total_balanced,
+                       addon_bond, pricing_status, cost_notes, bid_notes,
+                       folder, review_flag, sort_code)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    item.id, estimate_id, item.code, item.description,
-                    item.quantity, item.unit, item.totalCost, item.totalPrice,
+                    item.id, estimate_id, item.biditemCode, item.description, item.type,
+                    item.quantity, item.bidQuantity, item.units, item.bidPrice,
+                    item.labor, item.burden, item.permanentMaterial, item.constructionMaterial,
+                    item.subcontract, item.equipmentOperatingExpense, item.companyEquipment,
+                    item.rentedEquipment,
+                    item.misc1, item.misc2, item.misc3, item.directTotal, item.indirectTotal,
+                    item.totalCost, item.manhours, item.markup, item.totalTakeoff,
+                    item.totalBalanced, item.addonBond,
+                    item.pricingStatus, item.costNotes, item.bidNotes,
+                    item.folder, item.reviewFlag, item.sortCode,
                 ),
             )
             count += 1
@@ -329,25 +407,40 @@ def upsert_biditems(items: list[HBBidItem], estimate_id: int) -> int:
         conn.close()
 
 
-def upsert_activities(activities: list[HBActivity], estimate_id: int) -> int:
-    """Insert activities for an estimate. Returns count inserted."""
+def upsert_hb_activities(activities: list[HBActivity], estimate_id: int) -> int:
+    """Insert or replace activities for an estimate. Returns count."""
     conn = get_connection()
     try:
+        conn.execute("DELETE FROM hb_activity WHERE estimate_id = ?", (estimate_id,))
         count = 0
         for act in activities:
             conn.execute(
                 """INSERT INTO hb_activity (
-                       hcss_act_id, estimate_id, code, description,
-                       quantity, unit, labor_hours, labor_cost,
-                       equip_hours, equip_cost, matl_cost, sub_cost,
-                       total_cost, production_rate)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       hcss_act_id, estimate_id, hcss_biditem_id, biditem_code,
+                       activity_code, description, quantity, units,
+                       production_type, production_rate, hours_per_day,
+                       crew, crew_hours, crew_percent, man_hours,
+                       calculated_duration, efficient_percent,
+                       labor, burden, perm_material, const_material,
+                       subcontract, equip_oe, company_equip, rented_equip,
+                       misc1, misc2, misc3, direct_total, crew_cost,
+                       notes, workers_comp_code, calendar, factorable, factor,
+                       non_additive, heavyjob_code, heavyjob_description,
+                       heavyjob_quantity, heavyjob_unit)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    act.id, estimate_id, act.code, act.description,
-                    act.quantity, act.unit, act.laborHours, act.laborCost,
-                    act.equipmentHours, act.equipmentCost,
-                    act.materialCost, act.subcontractCost,
-                    act.totalCost, act.productionRate,
+                    act.id, estimate_id, act.biditemId, act.biditemCode,
+                    act.activityCode, act.description, act.quantity, act.units,
+                    act.productionType, act.productionRate, act.hoursPerDay,
+                    act.crew, act.crewHours, act.crewPercent, act.manHours,
+                    act.calculatedDuration, act.efficientPercent,
+                    act.labor, act.burden, act.permanentMaterial, act.constructionMaterial,
+                    act.subcontract, act.equipmentOperatingExpense, act.companyEquipment,
+                    act.rentedEquipment,
+                    act.misc1, act.misc2, act.misc3, act.directTotal, act.crewCost,
+                    act.notes, act.workersCompCode, act.calendar, act.factorable, act.factor,
+                    act.nonAdditive, act.heavyJobCode, act.heavyJobDescription,
+                    act.heavyJobQuantity, act.heavyJobUnit,
                 ),
             )
             count += 1
@@ -357,20 +450,31 @@ def upsert_activities(activities: list[HBActivity], estimate_id: int) -> int:
         conn.close()
 
 
-def upsert_resources(resources: list[HBResource], estimate_id: int) -> int:
-    """Insert resources for an estimate. Returns count inserted."""
+def upsert_hb_resources(resources: list[HBResource], estimate_id: int) -> int:
+    """Insert or replace resources for an estimate. Returns count."""
     conn = get_connection()
     try:
+        conn.execute("DELETE FROM hb_resource WHERE estimate_id = ?", (estimate_id,))
         count = 0
         for res in resources:
             conn.execute(
                 """INSERT INTO hb_resource (
-                       hcss_res_id, estimate_id, type, code,
-                       description, rate, hours, cost)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       hcss_res_id, estimate_id, hcss_biditem_id, hcss_activity_id,
+                       activity_code, biditem_code, resource_code, description,
+                       type_cost, sub_type, quantity, units, percent,
+                       unit_price, currency, total, pieces,
+                       factorable, factor, skip_cost,
+                       operating_percent, rent_percent, crew_code,
+                       equip_operator_code, man_hour_unit)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    res.id, estimate_id, res.type, res.code,
-                    res.description, res.rate, res.hours, res.cost,
+                    res.id, estimate_id, res.biditemId, res.activityId,
+                    res.activityCode, res.biditemCode, res.resourceCode, res.description,
+                    res.typeCost, res.subType, res.quantity, res.units, res.percent,
+                    res.unitPrice, res.currency, res.total, res.pieces,
+                    res.factorable, res.factor, res.skipCost,
+                    res.operatingPercent, res.rentPercent, res.crewCode,
+                    res.equipmentOperatorCode, res.manHourUnit,
                 ),
             )
             count += 1
@@ -380,15 +484,126 @@ def upsert_resources(resources: list[HBResource], estimate_id: int) -> int:
         conn.close()
 
 
-def link_job_to_estimate(job_id: int, estimate_id: int) -> None:
-    """Set the estimate_id FK on a job record."""
+# ── HeavyBid Readers ───────────────────────────────────────────
+
+def get_all_hb_estimates() -> list[dict]:
+    """Get all synced HeavyBid estimates with linked job info."""
     conn = get_connection()
     try:
-        conn.execute(
-            "UPDATE job SET estimate_id = ? WHERE job_id = ?",
-            (estimate_id, job_id),
-        )
-        conn.commit()
+        rows = conn.execute("""
+            SELECT e.*,
+                   j.job_number AS hj_job_number,
+                   j.name AS hj_job_name,
+                   j.status AS hj_job_status,
+                   (SELECT COUNT(*) FROM hb_biditem bi WHERE bi.estimate_id = e.estimate_id) AS biditem_count,
+                   (SELECT COUNT(*) FROM hb_activity a WHERE a.estimate_id = e.estimate_id) AS activity_count,
+                   (SELECT COUNT(*) FROM hb_resource r WHERE r.estimate_id = e.estimate_id) AS resource_count
+            FROM hb_estimate e
+            LEFT JOIN job j ON e.linked_job_id = j.job_id
+            ORDER BY e.code
+        """).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_hb_estimate_detail(estimate_id: int) -> dict | None:
+    """Get a single HeavyBid estimate with linked job info and counts."""
+    conn = get_connection()
+    try:
+        row = conn.execute("""
+            SELECT e.*,
+                   j.job_number AS hj_job_number,
+                   j.name AS hj_job_name,
+                   j.status AS hj_job_status,
+                   (SELECT COUNT(*) FROM hb_biditem bi WHERE bi.estimate_id = e.estimate_id) AS biditem_count,
+                   (SELECT COUNT(*) FROM hb_activity a WHERE a.estimate_id = e.estimate_id) AS activity_count,
+                   (SELECT COUNT(*) FROM hb_resource r WHERE r.estimate_id = e.estimate_id) AS resource_count
+            FROM hb_estimate e
+            LEFT JOIN job j ON e.linked_job_id = j.job_id
+            WHERE e.estimate_id = ?
+        """, (estimate_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_hb_biditems(estimate_id: int) -> list[dict]:
+    """Get all bid items for an estimate, ordered by sort code."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT bi.*,
+                   (SELECT COUNT(*) FROM hb_activity a WHERE a.estimate_id = bi.estimate_id
+                    AND a.hcss_biditem_id = bi.hcss_bi_id) AS activity_count
+            FROM hb_biditem bi
+            WHERE bi.estimate_id = ?
+            ORDER BY bi.sort_code, bi.biditem_code
+        """, (estimate_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_hb_activities(estimate_id: int, biditem_id: str = None) -> list[dict]:
+    """Get activities for an estimate, optionally filtered by bid item."""
+    conn = get_connection()
+    try:
+        if biditem_id:
+            rows = conn.execute("""
+                SELECT a.*,
+                       (SELECT COUNT(*) FROM hb_resource r WHERE r.estimate_id = a.estimate_id
+                        AND r.hcss_activity_id = a.hcss_act_id) AS resource_count
+                FROM hb_activity a
+                WHERE a.estimate_id = ? AND a.hcss_biditem_id = ?
+                ORDER BY a.activity_code
+            """, (estimate_id, biditem_id)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT a.*,
+                       (SELECT COUNT(*) FROM hb_resource r WHERE r.estimate_id = a.estimate_id
+                        AND r.hcss_activity_id = a.hcss_act_id) AS resource_count
+                FROM hb_activity a
+                WHERE a.estimate_id = ?
+                ORDER BY a.biditem_code, a.activity_code
+            """, (estimate_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_hb_resources(estimate_id: int, activity_id: str = None) -> list[dict]:
+    """Get resources for an estimate, optionally filtered by activity."""
+    conn = get_connection()
+    try:
+        if activity_id:
+            rows = conn.execute("""
+                SELECT * FROM hb_resource
+                WHERE estimate_id = ? AND hcss_activity_id = ?
+                ORDER BY type_cost, resource_code
+            """, (estimate_id, activity_id)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT * FROM hb_resource
+                WHERE estimate_id = ?
+                ORDER BY activity_code, type_cost, resource_code
+            """, (estimate_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_hb_estimates_for_job(job_id: int) -> list[dict]:
+    """Get all HeavyBid estimates linked to a HeavyJob job."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT estimate_id, hcss_est_id, code, name, bid_total, total_manhours
+            FROM hb_estimate
+            WHERE linked_job_id = ?
+            ORDER BY code
+        """, (job_id,)).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

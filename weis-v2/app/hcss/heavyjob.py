@@ -227,6 +227,7 @@ def _flatten_timecard(detail: dict) -> list[HJTimeCard]:
                 foremanName=foreman_name,
                 status=status,
                 quantity=cc_info.get("quantity"),
+                notes=cc_info.get("privateNotes"),
             ))
 
     return rows

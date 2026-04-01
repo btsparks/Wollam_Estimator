@@ -124,7 +124,7 @@ class HCSSAuth:
                     "grant_type": "client_credentials",
                     "client_id": self._client_id,
                     "client_secret": self._client_secret,
-                    "scope": "heavyjob:read timecards:read dis:read e360:read e360:timecards:read",
+                    "scope": "heavyjob:read timecards:read dis:read e360:read e360:timecards:read heavybid:read heavybid:system:read precon:read",
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=30.0,

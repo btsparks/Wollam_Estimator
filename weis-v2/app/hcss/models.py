@@ -228,6 +228,7 @@ class HJTimeCard(BaseModel):
     foremanName: Optional[str] = None          # Foreman description from timecard
     status: Optional[str] = None               # 'Approved', 'Pending'
     quantity: Optional[float] = None           # Production quantity that day
+    notes: Optional[str] = None                # Foreman's cost code note (privateNotes)
 
     _strip_name = field_validator("employeeName", mode="before")(_strip_str)
 
@@ -330,23 +331,122 @@ class HJSubcontract(BaseModel):
 # of estimating intelligence.
 # ─────────────────────────────────────────────────────────────
 
+class HBEstimateFilters(BaseModel):
+    """Nested filters object from HeavyBid estimate response."""
+    model_config = ConfigDict(from_attributes=True)
+
+    projectName: Optional[str] = None
+    projectNumber: Optional[str] = None
+    status: Optional[str] = None
+    engineer: Optional[str] = None
+    estimator: Optional[str] = None
+    owner: Optional[str] = None
+    bidDate: Optional[str] = None
+    startDate: Optional[str] = None
+    reviewDate: Optional[str] = None
+    createdDate: Optional[str] = None
+    modifiedDate: Optional[str] = None
+    state: Optional[str] = None
+    typeOfWork: Optional[str] = None
+    estimateTag1: Optional[str] = None
+    estimateTag2: Optional[str] = None
+    estimateTag3: Optional[str] = None
+    estimateTag4: Optional[str] = None
+
+
+class HBEstimateTotals(BaseModel):
+    """Nested totals object from HeavyBid estimate response."""
+    model_config = ConfigDict(from_attributes=True)
+
+    # Labor
+    baseLabor_Direct: Optional[float] = None
+    baseLabor_Indirect: Optional[float] = None
+    baseLabor_Total: Optional[float] = None
+    burden_Direct: Optional[float] = None
+    burden_Indirect: Optional[float] = None
+    burden_Total: Optional[float] = None
+    totalLabor_Direct: Optional[float] = None
+    totalLabor_Indirect: Optional[float] = None
+    totalLabor_Total: Optional[float] = None
+    # Material
+    permanentMaterial_Direct: Optional[float] = None
+    permanentMaterial_Indirect: Optional[float] = None
+    permanentMaterial_Total: Optional[float] = None
+    constructionMaterial_Direct: Optional[float] = None
+    constructionMaterial_Indirect: Optional[float] = None
+    constructionMaterial_Total: Optional[float] = None
+    # Subcontract
+    subcontract_Direct: Optional[float] = None
+    subcontract_Indirect: Optional[float] = None
+    subcontract_Total: Optional[float] = None
+    # Equipment
+    equipmentOperatingExpense_Direct: Optional[float] = None
+    equipmentOperatingExpense_Indirect: Optional[float] = None
+    equipmentOperatingExpense_Total: Optional[float] = None
+    companyEquipment_Direct: Optional[float] = None
+    companyEquipment_Indirect: Optional[float] = None
+    companyEquipment_Total: Optional[float] = None
+    rentedEquipment_Direct: Optional[float] = None
+    rentedEquipment_Indirect: Optional[float] = None
+    rentedEquipment_Total: Optional[float] = None
+    # Equipment totals
+    totalEqp_Direct: Optional[float] = None
+    totalEqp_Indirect: Optional[float] = None
+    totalEqp_Total: Optional[float] = None
+    # Entry cost
+    totalEntryCost_Takeoff_Direct: Optional[float] = None
+    totalEntryCost_Takeoff_Indirect: Optional[float] = None
+    totalEntryCost_Takeoff_Total: Optional[float] = None
+    totalEntryCost_Bid_Direct: Optional[float] = None
+    totalEntryCost_Bid_Indirect: Optional[float] = None
+    totalEntryCost_Bid_Total: Optional[float] = None
+    # Markup & bid
+    balMarkup_Bid: Optional[float] = None
+    actualMarkup_Bid: Optional[float] = None
+    balancedBid_Bid: Optional[float] = None
+    bidTotal_Bid: Optional[float] = None
+    # Manhours
+    manhours_Direct: Optional[float] = None
+    manhours_Indirect: Optional[float] = None
+    manhours_Total: Optional[float] = None
+    # Addons
+    addonBondTotal: Optional[float] = None
+    addon_Cost: Optional[float] = None
+    bond: Optional[float] = None
+    addon_Markup: Optional[float] = None
+    addon_Total: Optional[float] = None
+    # Misc
+    misc1_Total: Optional[float] = None
+    misc2_Total: Optional[float] = None
+    misc3_Total: Optional[float] = None
+    totalCost_Takeoff: Optional[float] = None
+    totalCost_Bid_LessPassThrough: Optional[float] = None
+    job_Duration: Optional[float] = None
+
+
 class HBEstimate(BaseModel):
     """
     HeavyBid estimate record.
 
     Represents a bid for a project. Links to bid items (pay items),
     activities (cost buildup), and resources (labor/equipment rates).
+    The estimate code typically starts with a job number (e.g. "8553-CO-WEIR")
+    which links to the corresponding HeavyJob project.
     """
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
-    id: Optional[str] = None                   # HCSS UUID
-    name: Optional[str] = None
-    description: Optional[str] = None
-    bidDate: Optional[date] = None
-    status: Optional[str] = None               # 'Won', 'Lost', 'Pending'
-    totalCost: Optional[float] = None
-    totalPrice: Optional[float] = None
+    id: Optional[str] = None
+    partitionId: Optional[str] = None
     businessUnitId: Optional[str] = None
+    businessUnitCode: Optional[str] = None
+    heavyBidDivision: Optional[str] = None
+    code: Optional[str] = None                 # e.g. "8553-CO-WEIR"
+    name: Optional[str] = None                 # e.g. "SPD Pump Base Welding"
+    processedStatus: Optional[int] = None
+    description: Optional[str] = None
+    estimateVersion: Optional[str] = None
+    filters: Optional[HBEstimateFilters] = None
+    totals: Optional[HBEstimateTotals] = None
 
     _strip_name = field_validator("name", mode="before")(_strip_str)
 
@@ -357,17 +457,50 @@ class HBBidItem(BaseModel):
 
     The owner's line items — what the owner pays us for.
     Each bid item is backed by one or more activities (cost buildup).
+    Full cost breakdown stored at this level for chat query granularity.
     """
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: Optional[str] = None
     estimateId: Optional[str] = None
-    code: Optional[str] = None
+    estimateCode: Optional[str] = None
+    lastModified: Optional[str] = None
+    biditemCode: Optional[str] = None
     description: Optional[str] = None
+    type: Optional[str] = None                 # "D" = direct, "I" = indirect
     quantity: Optional[float] = None
-    unit: Optional[str] = None
+    bidQuantity: Optional[float] = None
+    units: Optional[str] = None
+    bidPrice: Optional[float] = None
+    # Cost breakdown
+    labor: Optional[float] = None
+    burden: Optional[float] = None
+    permanentMaterial: Optional[float] = None
+    constructionMaterial: Optional[float] = None
+    subcontract: Optional[float] = None
+    equipmentOperatingExpense: Optional[float] = None
+    companyEquipment: Optional[float] = None
+    rentedEquipment: Optional[float] = None
+    misc1: Optional[float] = None
+    misc2: Optional[float] = None
+    misc3: Optional[float] = None
+    directTotal: Optional[float] = None
+    indirectTotal: Optional[float] = None
     totalCost: Optional[float] = None
-    totalPrice: Optional[float] = None
+    manhours: Optional[float] = None
+    markup: Optional[float] = None
+    totalTakeoff: Optional[float] = None
+    totalBalanced: Optional[float] = None
+    addonBond: Optional[float] = None
+    # Metadata
+    clientNumber: Optional[str] = None
+    wbsCode: Optional[str] = None
+    pricingStatus: Optional[str] = None
+    costNotes: Optional[str] = None
+    bidNotes: Optional[str] = None
+    folder: Optional[str] = None
+    reviewFlag: Optional[str] = None
+    sortCode: Optional[str] = None
 
     _strip_description = field_validator("description", mode="before")(_strip_str)
 
@@ -376,48 +509,107 @@ class HBActivity(BaseModel):
     """
     HeavyBid activity (cost buildup).
 
-    The estimator's detail — how each bid item is priced. Breaks cost down
-    into labor, equipment, material, and subcontract components. The production
-    rate field tells you how fast the estimator assumed the crew would work.
+    The estimator's detail — how each bid item is priced. Includes production
+    assumptions, crew configuration, duration, and the estimator's notes
+    explaining the reasoning behind the numbers.
     """
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: Optional[str] = None
     estimateId: Optional[str] = None
-    bidItemId: Optional[str] = None
-    code: Optional[str] = None
+    estimateCode: Optional[str] = None
+    lastModified: Optional[str] = None
+    biditemId: Optional[str] = None
+    biditemCode: Optional[str] = None
+    activityCode: Optional[str] = None
     description: Optional[str] = None
     quantity: Optional[float] = None
-    unit: Optional[str] = None
-    laborHours: Optional[float] = None
-    laborCost: Optional[float] = None
-    equipmentHours: Optional[float] = None
-    equipmentCost: Optional[float] = None
-    materialCost: Optional[float] = None
-    subcontractCost: Optional[float] = None
-    totalCost: Optional[float] = None
+    units: Optional[str] = None
+    # Production
+    productionType: Optional[str] = None       # "UH" = units/hour
     productionRate: Optional[float] = None
+    hoursPerDay: Optional[float] = None
+    crew: Optional[str] = None
+    crewHours: Optional[float] = None
+    crewPercent: Optional[float] = None
+    manHours: Optional[float] = None
+    calculatedDuration: Optional[float] = None
+    efficientPercent: Optional[float] = None
+    # Cost breakdown
+    labor: Optional[float] = None
+    burden: Optional[float] = None
+    permanentMaterial: Optional[float] = None
+    constructionMaterial: Optional[float] = None
+    subcontract: Optional[float] = None
+    equipmentOperatingExpense: Optional[float] = None
+    companyEquipment: Optional[float] = None
+    rentedEquipment: Optional[float] = None
+    misc1: Optional[float] = None
+    misc2: Optional[float] = None
+    misc3: Optional[float] = None
+    directTotal: Optional[float] = None
+    crewCost: Optional[float] = None
+    crewCost_WithMaterial: Optional[float] = None
+    # Estimator notes — critical context
+    notes: Optional[str] = None
+    # Metadata
+    workersCompCode: Optional[str] = None
+    calendar: Optional[str] = None
+    factorable: Optional[str] = None
+    factor: Optional[float] = None
+    nonAdditive: Optional[str] = None
+    # HeavyJob mapping fields (from export, may be empty)
+    heavyJobCode: Optional[str] = None
+    heavyJobDescription: Optional[str] = None
+    heavyJobQuantity: Optional[float] = None
+    heavyJobUnit: Optional[str] = None
+    # Accounting
+    accountingJCCode1: Optional[str] = None
+    accountingJCCode2: Optional[str] = None
+    accountingRevenueCode: Optional[str] = None
 
     _strip_description = field_validator("description", mode="before")(_strip_str)
 
 
 class HBResource(BaseModel):
     """
-    HeavyBid resource (labor or equipment).
+    HeavyBid resource (labor, equipment, or material).
 
-    The rate book — what rate was assumed for each worker type or piece
-    of equipment in the estimate.
+    Individual line items within an activity — the crew members, equipment,
+    and materials that make up the cost buildup.
     """
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: Optional[str] = None
     estimateId: Optional[str] = None
-    type: Optional[str] = None                 # 'Labor', 'Equipment'
-    code: Optional[str] = None
+    estimateCode: Optional[str] = None
+    biditemId: Optional[str] = None
+    activityId: Optional[str] = None
+    lastModified: Optional[str] = None
+    resourceCode: Optional[str] = None
+    activityCode: Optional[str] = None
+    biditemCode: Optional[str] = None
     description: Optional[str] = None
-    rate: Optional[float] = None
-    hours: Optional[float] = None
-    cost: Optional[float] = None
+    typeCost: Optional[str] = None             # "L" = labor, "E" = equipment, "P" = permanent material
+    typeOfEquipmentRent: Optional[str] = None
+    subType: Optional[str] = None
+    quantity: Optional[float] = None
+    units: Optional[str] = None
+    percent: Optional[float] = None
+    unitPrice: Optional[float] = None
+    currency: Optional[str] = None
+    subTypeCost: Optional[float] = None
+    total: Optional[float] = None
+    pieces: Optional[float] = None
+    factorable: Optional[str] = None
+    factor: Optional[float] = None
+    skipCost: Optional[str] = None
+    operatingPercent: Optional[float] = None
+    rentPercent: Optional[float] = None
+    crewCode: Optional[str] = None
+    equipmentOperatorCode: Optional[str] = None
+    supplementalDescription: Optional[str] = None
+    manHourUnit: Optional[float] = None
 
     _strip_description = field_validator("description", mode="before")(_strip_str)
 

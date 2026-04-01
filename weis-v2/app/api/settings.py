@@ -16,6 +16,7 @@ from app.services.cost_recalc import (
     get_recast_summary_all_jobs,
     get_rate_coverage,
 )
+from app.services.cost_report_import import import_all_cost_reports
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -329,3 +330,11 @@ async def get_coverage():
         return coverage
     finally:
         conn.close()
+
+
+# ── Cost report import ────────────────────────────────────────────
+
+@router.post("/import-cost-reports")
+async def import_cost_reports():
+    """Import actual costs from HeavyJob Cost Analysis report exports."""
+    return import_all_cost_reports()

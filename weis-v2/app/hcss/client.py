@@ -44,7 +44,7 @@ class HCSSClient:
 
     Usage:
         auth = HCSSAuth()
-        client = HCSSClient(auth, base_url="https://api.hcss.com/heavyjob")
+        client = HCSSClient(auth, base_url="https://api.hcssapps.com/heavyjob")
         jobs = await client.get_paginated("/api/v1/jobs", params={"status": "Closed"})
     """
 
@@ -52,7 +52,7 @@ class HCSSClient:
         """
         Args:
             auth: HCSSAuth instance for token management.
-            base_url: Base URL for the API (e.g., https://api.hcss.com/heavyjob).
+            base_url: Base URL for the API (e.g., https://api.hcssapps.com/heavyjob).
         """
         self._auth = auth
         self._base_url = base_url.rstrip("/")

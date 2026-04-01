@@ -11,7 +11,7 @@ from app.services.document_enrichment import enrich_from_documents
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
-ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".csv", ".txt"}
+ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".csv", ".txt", ".md"}
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
 # Document type options
