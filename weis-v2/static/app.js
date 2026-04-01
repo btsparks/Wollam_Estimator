@@ -13,7 +13,7 @@ const state = {
     filter: 'all',
     jobStatusFilter: 'all',
     searchQuery: '',
-    viewMode: 'card',       // 'card' or 'table'
+    viewMode: 'table',      // 'card' or 'table'
     sortField: 'data_richness',
     sortDir: 'desc',
     progress: null,
@@ -1878,6 +1878,7 @@ let estActivities = [];
 let estResources = [];
 let estSearchQuery = '';
 let estSyncLoading = false;
+let estViewMode = 'table';  // 'card' or 'table'
 let estSelectedBidItemId = null;
 let estSelectedActivityId = null;
 let estExpandedBidItems = new Set();
@@ -1929,18 +1930,26 @@ function renderEstimateList() {
         </div>
 
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-            <input type="text" placeholder="Search estimates..." value="${escHtml(estSearchQuery)}"
-                   oninput="estSearchQuery=this.value;renderEstimateList()"
-                   style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-size:14px;width:300px;background:var(--bg-card);color:var(--text-primary);">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <input type="text" placeholder="Search estimates..." value="${escHtml(estSearchQuery)}"
+                       oninput="estSearchQuery=this.value;renderEstimateList()"
+                       style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-size:14px;width:300px;background:var(--bg-card);color:var(--text-primary);">
+                <span style="font-size:12px;color:var(--text-tertiary);">${filtered.length} estimate${filtered.length !== 1 ? 's' : ''}</span>
+                <div class="view-toggle">
+                    <button class="view-toggle-btn ${estViewMode === 'card' ? 'active' : ''}" onclick="estViewMode='card';renderEstimateList()" title="Card view">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                    </button>
+                    <button class="view-toggle-btn ${estViewMode === 'table' ? 'active' : ''}" onclick="estViewMode='table';renderEstimateList()" title="Table view">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                    </button>
+                </div>
+            </div>
             <button onclick="openSyncModal()" style="padding:8px 20px;background:var(--wollam-blue);color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;">
                 ${estSyncLoading ? 'Syncing...' : 'Sync from HeavyBid'}
             </button>
         </div>
 
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px;">
-            ${filtered.length === 0 ? '<div class="empty-state"><p>No estimates found. Use "Sync from HeavyBid" to pull estimate data.</p></div>' : ''}
-            ${filtered.map(est => renderEstimateCard(est)).join('')}
-        </div>
+        ${filtered.length === 0 ? '<div class="empty-state"><p>No estimates found. Use "Sync from HeavyBid" to pull estimate data.</p></div>' : (estViewMode === 'table' ? renderEstimateTable(filtered) : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px;">${filtered.map(est => renderEstimateCard(est)).join('')}</div>`)}
 
         <div id="syncModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:none;align-items:center;justify-content:center;">
             <div style="background:var(--bg-card);border-radius:16px;padding:32px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
@@ -1971,6 +1980,45 @@ function renderEstimateCard(est) {
                 <div><span style="color:var(--text-tertiary);">Activities</span><br><strong>${est.activity_count || 0} activities</strong></div>
             </div>
             ${est.state || est.estimator ? `<div style="margin-top:10px;font-size:12px;color:var(--text-tertiary);">${est.state ? escHtml(est.state) : ''}${est.state && est.estimator ? ' · ' : ''}${est.estimator ? 'Est: ' + escHtml(est.estimator) : ''}</div>` : ''}
+        </div>
+    `;
+}
+
+function renderEstimateTable(filtered) {
+    return `
+        <div class="card" style="overflow-x:auto;">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th style="text-align:center;">Linked</th>
+                        <th style="text-align:right;">Bid Total</th>
+                        <th style="text-align:right;">Manhours</th>
+                        <th style="text-align:right;">Bid Items</th>
+                        <th style="text-align:right;">Activities</th>
+                        <th style="text-align:center;">Estimator</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${filtered.map(est => {
+                        const linkedBadge = est.linked_job_id
+                            ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(37,99,235,0.1);color:var(--wollam-blue);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="event.stopPropagation();navigate('interview',${est.linked_job_id})">HJ ${escHtml(est.hj_job_number || '')} &rarr;</span>`
+                            : `<span style="padding:2px 8px;background:rgba(156,163,175,0.1);color:var(--text-tertiary);border-radius:6px;font-size:11px;">—</span>`;
+                        return `
+                        <tr class="data-row" onclick="navigate('estimates',${est.estimate_id})">
+                            <td style="font-weight:700;color:var(--wollam-navy);white-space:nowrap;">${escHtml(est.code || '')}</td>
+                            <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(est.name || '')}</td>
+                            <td style="text-align:center;">${linkedBadge}</td>
+                            <td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">$${fmt(est.bid_total)}</td>
+                            <td style="text-align:right;font-variant-numeric:tabular-nums;">${fmt(est.total_manhours)}</td>
+                            <td style="text-align:right;font-variant-numeric:tabular-nums;">${est.biditem_count || 0}</td>
+                            <td style="text-align:right;font-variant-numeric:tabular-nums;">${est.activity_count || 0}</td>
+                            <td style="text-align:center;font-size:12px;color:var(--text-secondary);">${escHtml(est.estimator || '—')}</td>
+                        </tr>`;
+                    }).join('')}
+                </tbody>
+            </table>
         </div>
     `;
 }
