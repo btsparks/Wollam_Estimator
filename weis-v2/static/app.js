@@ -270,15 +270,15 @@ function renderJobTable(filtered) {
                         <th class="sortable" onclick="toggleSort('status')" style="text-align: center;">Status ${sortIcon('status')}</th>
                         <th class="sortable" onclick="toggleSort('cost_code_count')" style="text-align: right;">Cost Codes ${sortIcon('cost_code_count')}</th>
                         <th class="sortable" onclick="toggleSort('cost_codes_with_data')" style="text-align: right;">With Data ${sortIcon('cost_codes_with_data')}</th>
-                        <th class="sortable" onclick="toggleSort('data_richness')" style="text-align: right;">Richness ${sortIcon('data_richness')}</th>
-                        <th class="sortable" onclick="toggleSort('cost_codes_with_context')" style="text-align: right;">Context ${sortIcon('cost_codes_with_context')}</th>
+                        <th style="text-align: center;">Estimate</th>
                         <th class="sortable" onclick="toggleSort('interview_status')" style="text-align: center;">Interview ${sortIcon('interview_status')}</th>
                     </tr>
                 </thead>
                 <tbody>
                     ${filtered.map(j => {
-                        const contextPct = j.cost_codes_with_data > 0
-                            ? Math.round((j.cost_codes_with_context / j.cost_codes_with_data) * 100) : 0;
+                        const estBadge = j.linked_estimate_id
+                            ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(37,99,235,0.1);color:var(--wollam-blue);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="event.stopPropagation();navigate('estimates',${j.linked_estimate_id})">${escHtml(j.linked_estimate_code || 'HB')} &rarr;</span>`
+                            : `<span style="color:var(--text-tertiary);font-size:11px;">—</span>`;
                         return `
                         <tr class="data-row" onclick="navigate('interview', ${j.job_id})">
                             <td style="font-weight: 700; color: var(--wollam-navy);">${j.job_number}</td>
@@ -286,19 +286,7 @@ function renderJobTable(filtered) {
                             <td style="text-align: center;">${jobStatusBadge(j.status)}</td>
                             <td style="text-align: right; font-variant-numeric: tabular-nums;">${fmt(j.cost_code_count)}</td>
                             <td style="text-align: right; font-variant-numeric: tabular-nums;">${fmt(j.cost_codes_with_data)}</td>
-                            <td style="text-align: right;">
-                                <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
-                                    <div class="progress-bar" style="width: 60px; height: 4px;">
-                                        <div class="progress-fill navy" style="width: ${j.data_richness}%"></div>
-                                    </div>
-                                    <span style="font-variant-numeric: tabular-nums; min-width: 32px; text-align: right;">${j.data_richness}%</span>
-                                </div>
-                            </td>
-                            <td style="text-align: right;">
-                                <span style="font-variant-numeric: tabular-nums;">${j.cost_codes_with_context}</span>
-                                <span style="color: var(--text-tertiary); font-size: 11px;"> / ${j.cost_codes_with_data}</span>
-                                ${contextPct > 0 ? `<span style="color: var(--text-tertiary); font-size: 11px;"> (${contextPct}%)</span>` : ''}
-                            </td>
+                            <td style="text-align: center;">${estBadge}</td>
                             <td style="text-align: center;">${interviewBadge(j.interview_status)}</td>
                         </tr>`;
                     }).join('')}

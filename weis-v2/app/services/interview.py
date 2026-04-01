@@ -38,9 +38,12 @@ def get_jobs_with_interview_status() -> list[dict]:
                 COALESCE(di_agg.diary_count, 0) as diary_entry_count,
                 pc.id as pm_context_id,
                 pc.completed_at,
-                pc.source as pm_source
+                pc.source as pm_source,
+                est.estimate_id as linked_estimate_id,
+                est.code as linked_estimate_code
             FROM job j
             LEFT JOIN pm_context pc ON pc.job_id = j.job_id
+            LEFT JOIN hb_estimate est ON est.linked_job_id = j.job_id
             LEFT JOIN (
                 SELECT job_id,
                        COUNT(*) as cc_total,
@@ -104,6 +107,8 @@ def get_jobs_with_interview_status() -> list[dict]:
                 "interview_status": status,
                 "diary_entry_count": r.get("diary_entry_count", 0) or 0,
                 "pm_source": r.get("pm_source"),
+                "linked_estimate_id": r.get("linked_estimate_id"),
+                "linked_estimate_code": r.get("linked_estimate_code"),
             })
 
         return jobs
