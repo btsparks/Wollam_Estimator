@@ -2190,19 +2190,36 @@ function renderEstActivityDetail(act, bi) {
         .reduce((sum, r) => sum + (r.pieces || 0), 0);
     const crewEquip = res.filter(r => (r.type_cost || '').toUpperCase().trim() === 'E').length;
 
-    // MH/Unit: production_rate when production_type is MU (manhours per unit)
-    const mhPerUnit = act.production_rate || null;
+    // Production type determines how to interpret production_rate
+    const prodType = (act.production_type || '').toUpperCase();
+    let mhPerUnit = null;
+    let unitsPerHr = null;
 
-    // Units/Hr: crew_labor / MH/Unit (how many units the full crew produces per hour)
-    const unitsPerHr = (mhPerUnit && crewLabor) ? (crewLabor / mhPerUnit) : null;
+    if (prodType === 'MU' && act.production_rate) {
+        // Manhours per Unit: rate IS MH/Unit
+        mhPerUnit = act.production_rate;
+        unitsPerHr = crewLabor ? (crewLabor / mhPerUnit) : null;
+    } else if (prodType === 'UH' && act.production_rate) {
+        // Units per Hour: rate IS Units/Hr
+        unitsPerHr = act.production_rate;
+        mhPerUnit = crewLabor ? (crewLabor / unitsPerHr) : null;
+    } else if (prodType === 'HU' && act.production_rate) {
+        // Hours per Unit (crew-level): rate is crew-hours per unit
+        unitsPerHr = 1 / act.production_rate;
+        mhPerUnit = crewLabor ? (crewLabor * act.production_rate) : null;
+    } else {
+        // S (Shifts), empty, or unknown: derive from actuals
+        mhPerUnit = (act.man_hours && act.quantity) ? (act.man_hours / act.quantity) : null;
+        unitsPerHr = (mhPerUnit && crewLabor) ? (crewLabor / mhPerUnit) : null;
+    }
 
-    // Un/Shift: Units/Hr * hours_per_day
+    // Un/Shift: Units/Hr * hours_per_day (universal)
     const unPerShift = (unitsPerHr && act.hours_per_day) ? (unitsPerHr * act.hours_per_day) : null;
 
     // Crew$/Unit: crew_cost / quantity (NOT direct_total)
     const crewCostPerUnit = (act.crew_cost && act.quantity) ? (act.crew_cost / act.quantity) : null;
 
-    // Shifts: manhours / (crew_labor * hours_per_day)
+    // Shifts: manhours / (crew_labor * hours_per_day) (universal)
     const shifts = (act.man_hours && crewLabor && act.hours_per_day)
         ? (act.man_hours / (crewLabor * act.hours_per_day)) : null;
 
