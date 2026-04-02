@@ -2062,9 +2062,9 @@ function renderEstimateDetail() {
         <div style="margin-bottom:24px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
                 <button onclick="navigate('estimates')" style="padding:6px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-secondary);">&larr; Back to Estimates</button>
-                ${crossLink}
+                ${d.linked_job_id ? `<button onclick="navigate('interview',${d.linked_job_id})" style="padding:8px 20px;background:var(--wollam-blue);color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;">View Job ${escHtml(d.hj_job_number || '')} &rarr;</button>` : ''}
             </div>
-            ${d.linked_job_id ? `<div style="margin-bottom:12px;padding:8px 14px;background:rgba(37,99,235,0.05);border:1px solid rgba(37,99,235,0.15);border-radius:8px;font-size:13px;color:var(--wollam-blue);">Linked to HeavyJob: <strong>${escHtml(d.hj_job_number || '')} — ${escHtml(d.hj_job_name || '')}</strong> (${escHtml(d.hj_job_status || '')})</div>` : ''}
+            ${d.linked_job_id ? `<div onclick="navigate('interview',${d.linked_job_id})" style="margin-bottom:12px;padding:8px 14px;background:rgba(37,99,235,0.05);border:1px solid rgba(37,99,235,0.15);border-radius:8px;font-size:13px;color:var(--wollam-blue);cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background='rgba(37,99,235,0.1)'" onmouseout="this.style.background='rgba(37,99,235,0.05)'">Linked to HeavyJob: <strong>${escHtml(d.hj_job_number || '')} — ${escHtml(d.hj_job_name || '')}</strong> (${escHtml(d.hj_job_status || '')}) &rarr;</div>` : ''}
         </div>
 
         <!-- KPI Bar -->
