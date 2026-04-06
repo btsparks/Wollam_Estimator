@@ -19,6 +19,7 @@ from app.config import BID_DOCUMENTS_DIR
 from app.database import get_connection
 from app.services.document_extract import extract_text
 from app.services.sov_parser import parse_sov_file
+from app.services.bid_sync import resolve_bid_folder, sync_bid_documents
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,17 @@ async def create_bid(bid: BidCreate):
         )
         conn.commit()
         bid_id = cursor.lastrowid
+
+        # Auto-resolve Dropbox folder if bid_number provided
+        if bid.bid_number:
+            folder = resolve_bid_folder(bid.bid_number)
+            if folder:
+                conn.execute(
+                    "UPDATE active_bids SET dropbox_folder_path = ? WHERE id = ?",
+                    (str(folder), bid_id),
+                )
+                conn.commit()
+
         row = conn.execute("SELECT * FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
         return dict(row)
     finally:
@@ -347,8 +359,9 @@ async def list_documents(
     bid_id: int,
     addendum_number: Optional[int] = Query(None),
     doc_category: Optional[str] = Query(None),
+    sync_action: Optional[str] = Query(None),
 ):
-    """List documents for a bid, filterable by addendum or category."""
+    """List documents for a bid, filterable by addendum, category, or sync action."""
     conn = get_connection()
     try:
         query = "SELECT * FROM bid_documents WHERE bid_id = ?"
@@ -360,6 +373,9 @@ async def list_documents(
         if doc_category:
             query += " AND doc_category = ?"
             params.append(doc_category)
+        if sync_action:
+            query += " AND sync_action = ?"
+            params.append(sync_action)
 
         query += " ORDER BY addendum_number ASC, created_at ASC"
 
@@ -429,13 +445,109 @@ async def delete_document(doc_id: int):
         conn.execute("DELETE FROM bid_documents WHERE id = ?", (doc_id,))
         conn.commit()
 
-        # Clean up file
-        if existing["file_path"]:
+        # Clean up file — only delete locally-uploaded files, never Dropbox source files
+        if existing["file_path"] and not existing["dropbox_path"]:
             fp = Path(existing["file_path"])
             if fp.exists():
                 fp.unlink()
 
         return {"deleted": True, "doc_id": doc_id}
+    finally:
+        conn.close()
+
+
+# ── Dropbox Sync ────────────────────────────────────────────────
+
+@router.get("/resolve-folder")
+async def resolve_folder_preview(bid_number: str = Query(...)):
+    """Preview which Dropbox folder a bid number resolves to (no DB writes)."""
+    folder = resolve_bid_folder(bid_number)
+    if folder:
+        return {"found": True, "folder_path": str(folder), "folder_name": folder.name}
+    return {"found": False}
+
+
+class LinkFolderRequest(BaseModel):
+    bid_number: Optional[str] = None
+
+
+@router.post("/bids/{bid_id}/link-folder")
+async def link_folder(bid_id: int, body: LinkFolderRequest = LinkFolderRequest()):
+    """Resolve and link a Dropbox estimating folder to a bid."""
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT * FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+
+        number = body.bid_number or bid["bid_number"]
+        if not number:
+            return {"linked": False, "message": "No bid number provided"}
+
+        folder = resolve_bid_folder(number)
+        if not folder:
+            return {"linked": False, "message": f"No folder found matching bid number {number}"}
+
+        conn.execute(
+            "UPDATE active_bids SET dropbox_folder_path = ? WHERE id = ?",
+            (str(folder), bid_id),
+        )
+        conn.commit()
+        return {"linked": True, "folder_path": str(folder)}
+    finally:
+        conn.close()
+
+
+@router.post("/bids/{bid_id}/sync")
+async def sync_documents(bid_id: int):
+    """Trigger a Dropbox folder sync for a bid."""
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT id, dropbox_folder_path FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+        if not bid["dropbox_folder_path"]:
+            raise HTTPException(status_code=400, detail="No Dropbox folder linked to this bid")
+    finally:
+        conn.close()
+
+    try:
+        result = sync_bid_documents(bid_id)
+        return result
+    except Exception as e:
+        logger.error("Sync failed for bid %d: %s", bid_id, e)
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+
+
+@router.get("/bids/{bid_id}/sync-status")
+async def get_sync_status(bid_id: int):
+    """Get sync status and document counts for a bid."""
+    conn = get_connection()
+    try:
+        bid = conn.execute(
+            "SELECT sync_status, last_synced_at FROM active_bids WHERE id = ?",
+            (bid_id,),
+        ).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+
+        # Count documents by sync_action
+        action_counts = conn.execute(
+            """SELECT sync_action, COUNT(*) as cnt
+               FROM bid_documents
+               WHERE bid_id = ? AND sync_action IS NOT NULL
+               GROUP BY sync_action""",
+            (bid_id,),
+        ).fetchall()
+
+        document_counts = {r["sync_action"]: r["cnt"] for r in action_counts}
+        document_counts["total"] = sum(document_counts.values())
+
+        return {
+            "sync_status": bid["sync_status"],
+            "last_synced_at": bid["last_synced_at"],
+            "document_counts": document_counts,
+        }
     finally:
         conn.close()
 

@@ -427,7 +427,7 @@ Every completed project makes WEIS smarter and more valuable for the next bid. T
 | Document Intelligence | Built (manual upload) | PDF/Excel/CSV extraction + Claude enrichment |
 | Rate Settings & Cost Recalc | Built | SQLite + calculation engine |
 | General-Purpose AI Chat | Built (improved) | Claude API + FastAPI |
-| Database | Built (schema v2.8) | SQLite |
+| Database | Built (schema v2.10) | SQLite |
 | Frontend | Built | Vanilla JS + Tailwind CSS |
 
 ### Phase 2 Components — Bidding Platform
@@ -436,7 +436,7 @@ Every completed project makes WEIS smarter and more valuable for the next bid. T
 |-----------|--------|------------|
 | **Layer 1: Bid Board + Data Model** | Built (April 2026) | FastAPI + SQLite + vanilla JS |
 | Bid Schedule of Values Parser | Built | Claude Haiku + document extraction |
-| Document Management System | Built | File upload + text extraction + drag-and-drop |
+| Document Management System | Built (Dropbox-linked) | Dropbox folder sync + text extraction + fallback upload |
 | Pricing Groups (Holding Accounts) | Built | Database grouping model |
 | **Layer 2: Agent Intelligence** | Needs to be designed | — |
 | Chief Estimator Agent (orchestrator) | Needs to be built | Claude API + routing logic |

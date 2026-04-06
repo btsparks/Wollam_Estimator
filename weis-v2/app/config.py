@@ -21,6 +21,12 @@ DROPBOX_ROOT = Path(os.getenv(
     r"C:\Users\Travis Sparks\Dropbox (Wollam)"
 ))
 
+# Dropbox Estimating folder root (for bid folder linking)
+ESTIMATING_ROOT = Path(os.getenv(
+    "WEIS_ESTIMATING_ROOT",
+    DROPBOX_ROOT / "Estimates - Shared"
+))
+
 # API Keys
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 

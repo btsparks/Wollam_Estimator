@@ -43,7 +43,8 @@ weis-v2/
 │   │   ├── document_extract.py # Text extraction from PDF/Excel/CSV/TXT uploads
 │   │   ├── document_enrichment.py # AI enrichment of context from uploaded documents
 │   │   ├── rate_import.py  # Parse PayClass.txt + EquipmentSetup.txt from HeavyJob
-│   │   └── cost_recalc.py  # Recast cost calculation engine (hours × current rates)
+│   │   ├── cost_recalc.py  # Recast cost calculation engine (hours × current rates)
+│   │   └── bid_sync.py     # Dropbox-linked bid document sync (resolve folder, categorize, extract)
 │   ├── hcss/               # HCSS API integration (CARRIED OVER — working)
 │   │   ├── auth.py         # OAuth 2.0 client credentials
 │   │   ├── client.py       # Base HTTP client (pagination, retry, rate limiting)
@@ -64,14 +65,15 @@ weis-v2/
 ├── data/
 │   ├── documents/          # Uploaded PM context documents (per job_id subfolder)
 │   └── db/
-│       └── weis.db         # SQLite database (schema v2.3, populated with HeavyJob + diary + rate data)
+│       └── weis.db         # SQLite database (schema v2.10, populated with HeavyJob + diary + rate data)
 ├── scripts/
 │   └── sync_everything.py  # HCSS sync script (CARRIED OVER — working)
 ├── tests/                  # pytest tests
 │   ├── test_interview.py   # Interview API tests
 │   ├── test_diary.py       # Diary parser + API tests
 │   ├── test_documents.py   # Document upload + extraction tests
-│   └── test_settings.py    # Rate import, settings API, recast cost tests
+│   ├── test_settings.py    # Rate import, settings API, recast cost tests
+│   └── test_bid_sync.py    # Dropbox bid sync + API tests
 ├── docs/                   # Feature specs and architecture docs
 │   ├── ARCHITECTURE.md     # Technical design
 │   ├── PM_CONTEXT_INTERVIEW.md  # Feature spec
@@ -87,7 +89,7 @@ weis-v2/
 ## What's Built
 - **`app/hcss/`** — Complete HCSS HeavyJob API integration (OAuth, pagination, retry, rate limiting)
 - **`app/transform/`** — Rate card generation, discipline mapping, field intelligence calculator
-- **`app/database.py`** — Schema v2.3 with HeavyJob tables + diary_entry + job_document + pm_context/cc_context + labor_rate/equipment_rate
+- **`app/database.py`** — Schema v2.10 with HeavyJob tables + diary_entry + job_document + pm_context/cc_context + labor_rate/equipment_rate + bidding + Dropbox sync
 - **`app/config.py`** — Environment variable management
 - **`app/main.py`** — FastAPI app with interview, chat, and diary routers
 - **`app/api/interview.py`** — PM Context Interview endpoints
@@ -104,6 +106,7 @@ weis-v2/
 - **`app/services/cost_recalc.py`** — Recast cost engine: actual hours × current loaded rates per cost code
 - **`static/`** — Single-page frontend with interview + diary UI
 - **`config/discipline_map.yaml`** — Cost code to discipline mapping rules
+- **`app/services/bid_sync.py`** — Dropbox-linked bid document sync (folder resolution, categorization, extraction, change tracking)
 - **`scripts/sync_everything.py`** — Full HCSS data sync with adaptive concurrency
 
 ## What Needs To Be Built
@@ -199,4 +202,5 @@ python scripts/sync_everything.py
 ## Environment Setup
 - Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`
 - HCSS credentials (`HCSS_CLIENT_ID`, `HCSS_CLIENT_SECRET`) needed only for data sync
+- `WEIS_ESTIMATING_ROOT` — Dropbox estimating folder root for bid folder linking (default: `{WEIS_DROPBOX_ROOT}/Estimating`)
 - Database is pre-populated — no sync needed to start development

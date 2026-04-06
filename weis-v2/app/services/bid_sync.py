@@ -1,0 +1,303 @@
+"""Dropbox-linked bid document sync engine.
+
+Scans a bid's linked Dropbox estimating folder, discovers documents,
+categorizes them by folder structure, extracts text, and tracks changes
+between syncs (new, updated, unchanged, removed).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+
+from app.config import ESTIMATING_ROOT
+from app.database import get_connection
+from app.services.document_extract import extract_text
+
+logger = logging.getLogger(__name__)
+
+# Reuse from bidding.py
+ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".csv", ".txt", ".docx", ".doc"}
+
+# Addendum folder regex — matches "Addendum 1", "Addendum #2", "ADD-3", etc.
+ADDENDUM_RE = re.compile(r"addendum\s*#?\s*(\d+)", re.IGNORECASE)
+
+# Category mapping from folder/file names
+_CATEGORY_PATTERNS = [
+    (re.compile(r"spec", re.I), "spec"),
+    (re.compile(r"drawing", re.I), "drawing"),
+    (re.compile(r"contract", re.I), "contract"),
+    (re.compile(r"bid\s*schedule", re.I), "bid_schedule"),
+    (re.compile(r"rfi|clarification", re.I), "rfi_clarification"),
+    (re.compile(r"addendum", re.I), "addendum_package"),
+    (re.compile(r"bond", re.I), "bond_form"),
+    (re.compile(r"insurance|certificate", re.I), "insurance"),
+]
+
+
+def resolve_bid_folder(bid_number: str) -> Path | None:
+    """Find the Dropbox estimating folder for a bid number.
+
+    Wollam folder convention: "YY-MM-NNNN Project Name"
+    where NNNN is the estimate number (= bid_number).
+    Also supports legacy format "NNNN - Project Name".
+
+    Returns the full path, or None if not found.
+    """
+    if not ESTIMATING_ROOT.exists():
+        logger.warning("Estimating root not found: %s", ESTIMATING_ROOT)
+        return None
+
+    # Match "YY-MM-{bid_number} ..." or "{bid_number} - ..."
+    pattern = re.compile(
+        rf"(?:^\d{{2}}-\d{{2}}-{re.escape(bid_number)}\s|^{re.escape(bid_number)}\s*-\s*)"
+    )
+
+    for entry in sorted(ESTIMATING_ROOT.iterdir()):
+        if entry.is_dir() and pattern.match(entry.name):
+            logger.info("Resolved bid %s to folder: %s", bid_number, entry)
+            return entry
+
+    logger.info("No folder found for bid number %s in %s", bid_number, ESTIMATING_ROOT)
+    return None
+
+
+def categorize_bid_file(rel_path: str, file_name: str) -> tuple[str, int]:
+    """Determine doc_category and addendum_number from path and filename.
+
+    Returns (doc_category, addendum_number).
+    """
+    # Check for addendum folder in the relative path
+    addendum_number = 0
+    addendum_match = ADDENDUM_RE.search(rel_path)
+    if addendum_match:
+        addendum_number = int(addendum_match.group(1))
+
+    # Determine category from path and filename
+    combined = rel_path + " " + file_name
+    for pattern, category in _CATEGORY_PATTERNS:
+        if pattern.search(combined):
+            return category, addendum_number
+
+    return "general", addendum_number
+
+
+def sync_bid_documents(bid_id: int) -> dict:
+    """Sync documents from a bid's linked Dropbox folder.
+
+    Walks the folder, discovers/categorizes/extracts documents,
+    and tracks changes (new, updated, unchanged, removed).
+
+    Returns dict with counts: new, updated, unchanged, removed, total, errors.
+    """
+    conn = get_connection()
+    errors = []
+    counts = {"new": 0, "updated": 0, "unchanged": 0, "removed": 0}
+
+    try:
+        bid = conn.execute(
+            "SELECT id, dropbox_folder_path FROM active_bids WHERE id = ?",
+            (bid_id,),
+        ).fetchone()
+        if not bid:
+            raise ValueError(f"Bid {bid_id} not found")
+
+        folder_path = bid["dropbox_folder_path"]
+        if not folder_path:
+            raise ValueError(f"Bid {bid_id} has no linked Dropbox folder")
+
+        folder = Path(folder_path)
+        if not folder.exists():
+            raise ValueError(f"Dropbox folder not found: {folder_path}")
+
+        # Mark as syncing
+        conn.execute(
+            "UPDATE active_bids SET sync_status = 'syncing' WHERE id = ?",
+            (bid_id,),
+        )
+        conn.commit()
+
+        # Track which dropbox_paths we see during this scan
+        seen_paths = set()
+
+        # Walk the folder
+        for fpath in folder.rglob("*"):
+            if not fpath.is_file():
+                continue
+
+            suffix = fpath.suffix.lower()
+            if suffix not in ALLOWED_EXTENSIONS:
+                continue
+
+            dropbox_path = str(fpath)
+            seen_paths.add(dropbox_path)
+
+            try:
+                # Calculate hash
+                file_bytes = fpath.read_bytes()
+                file_hash = hashlib.sha256(file_bytes).hexdigest()
+                file_size = len(file_bytes)
+
+                # Categorize
+                rel_path = str(fpath.relative_to(folder))
+                doc_category, addendum_number = categorize_bid_file(rel_path, fpath.name)
+
+                # Check if this file already exists in bid_documents (by dropbox_path or filename)
+                existing = conn.execute(
+                    "SELECT id, file_hash FROM bid_documents WHERE bid_id = ? AND dropbox_path = ?",
+                    (bid_id, dropbox_path),
+                ).fetchone()
+
+                # Also check for a manually uploaded duplicate (same filename, no dropbox_path)
+                if existing is None:
+                    manual_dup = conn.execute(
+                        "SELECT id, file_hash FROM bid_documents WHERE bid_id = ? AND filename = ? AND dropbox_path IS NULL",
+                        (bid_id, fpath.name),
+                    ).fetchone()
+                    if manual_dup:
+                        # Adopt the manual upload — link it to Dropbox and update hash
+                        conn.execute(
+                            """UPDATE bid_documents
+                               SET dropbox_path = ?, file_path = ?, file_hash = ?,
+                                   file_size_bytes = ?, doc_category = ?,
+                                   addendum_number = ?, sync_action = 'unchanged'
+                               WHERE id = ?""",
+                            (dropbox_path, dropbox_path, file_hash,
+                             file_size, doc_category, addendum_number,
+                             manual_dup["id"]),
+                        )
+                        counts["unchanged"] += 1
+                        continue
+
+                if existing is None:
+                    # New file — insert and extract
+                    extracted_text = ""
+                    extraction_status = "pending"
+                    extraction_warning = None
+                    page_count = None
+                    word_count = None
+
+                    try:
+                        extracted_text = extract_text(fpath)
+                        extraction_status = "complete"
+                        word_count = len(extracted_text.split()) if extracted_text else 0
+                        if suffix == ".pdf":
+                            page_count = extracted_text.count("--- Page ")
+                    except Exception as e:
+                        extraction_status = "error"
+                        extraction_warning = str(e)
+                        logger.warning("Extraction failed for %s: %s", fpath.name, e)
+
+                    conn.execute(
+                        """INSERT INTO bid_documents
+                           (bid_id, filename, file_type, file_size_bytes, doc_category,
+                            extraction_status, extraction_warning, page_count, word_count,
+                            file_hash, addendum_number, file_path, extracted_text,
+                            dropbox_path, sync_action, version)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', 1)""",
+                        (
+                            bid_id, fpath.name, suffix, file_size, doc_category,
+                            extraction_status, extraction_warning, page_count, word_count,
+                            file_hash, addendum_number, dropbox_path,
+                            extracted_text, dropbox_path,
+                        ),
+                    )
+                    counts["new"] += 1
+
+                elif existing["file_hash"] != file_hash:
+                    # File changed — re-extract and update
+                    extracted_text = ""
+                    extraction_status = "pending"
+                    extraction_warning = None
+                    page_count = None
+                    word_count = None
+
+                    try:
+                        extracted_text = extract_text(fpath)
+                        extraction_status = "complete"
+                        word_count = len(extracted_text.split()) if extracted_text else 0
+                        if suffix == ".pdf":
+                            page_count = extracted_text.count("--- Page ")
+                    except Exception as e:
+                        extraction_status = "error"
+                        extraction_warning = str(e)
+
+                    conn.execute(
+                        """UPDATE bid_documents
+                           SET file_hash = ?, file_size_bytes = ?, doc_category = ?,
+                               extraction_status = ?, extraction_warning = ?,
+                               page_count = ?, word_count = ?, extracted_text = ?,
+                               addendum_number = ?, sync_action = 'updated',
+                               version = version + 1
+                           WHERE id = ?""",
+                        (
+                            file_hash, file_size, doc_category,
+                            extraction_status, extraction_warning,
+                            page_count, word_count, extracted_text,
+                            addendum_number,
+                            existing["id"],
+                        ),
+                    )
+                    counts["updated"] += 1
+
+                else:
+                    # Unchanged
+                    conn.execute(
+                        "UPDATE bid_documents SET sync_action = 'unchanged' WHERE id = ?",
+                        (existing["id"],),
+                    )
+                    counts["unchanged"] += 1
+
+            except Exception as e:
+                errors.append({"file": fpath.name, "error": str(e)})
+                logger.warning("Error processing %s: %s", fpath.name, e)
+
+        # Mark removed files — those with a dropbox_path that wasn't seen
+        removed = conn.execute(
+            """SELECT id FROM bid_documents
+               WHERE bid_id = ? AND dropbox_path IS NOT NULL AND sync_action != 'removed'""",
+            (bid_id,),
+        ).fetchall()
+
+        for row in removed:
+            doc = conn.execute(
+                "SELECT dropbox_path FROM bid_documents WHERE id = ?",
+                (row["id"],),
+            ).fetchone()
+            if doc and doc["dropbox_path"] not in seen_paths:
+                conn.execute(
+                    "UPDATE bid_documents SET sync_action = 'removed' WHERE id = ?",
+                    (row["id"],),
+                )
+                counts["removed"] += 1
+
+        # Update bid sync metadata
+        conn.execute(
+            """UPDATE active_bids
+               SET last_synced_at = ?, sync_status = 'complete'
+               WHERE id = ?""",
+            (datetime.now(tz=timezone.utc).isoformat(), bid_id),
+        )
+        conn.commit()
+
+    except Exception as e:
+        # Mark error status
+        try:
+            conn.execute(
+                "UPDATE active_bids SET sync_status = 'error' WHERE id = ?",
+                (bid_id,),
+            )
+            conn.commit()
+        except Exception:
+            pass
+        raise
+
+    finally:
+        conn.close()
+
+    counts["total"] = counts["new"] + counts["updated"] + counts["unchanged"] + counts["removed"]
+    counts["errors"] = errors
+    return counts

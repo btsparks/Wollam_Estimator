@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.9"
+SCHEMA_VERSION = "2.10"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -268,6 +268,9 @@ CREATE TABLE IF NOT EXISTS active_bids (
     status              TEXT DEFAULT 'active',
     notes               TEXT,
     is_focus            BOOLEAN DEFAULT FALSE,
+    dropbox_folder_path TEXT,
+    last_synced_at      DATETIME,
+    sync_status         TEXT DEFAULT 'never',
     created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -284,6 +287,8 @@ CREATE TABLE IF NOT EXISTS bid_documents (
     extraction_warning  TEXT,
     page_count          INTEGER,
     word_count          INTEGER,
+    dropbox_path        TEXT,
+    sync_action         TEXT,
     created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -1321,6 +1326,37 @@ def _migrate_2_8_to_2_9(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.9'")
 
 
+def _migrate_2_9_to_2_10(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.9 to 2.10: Dropbox-linked bidding.
+
+    Changes:
+    1. Add columns to active_bids: dropbox_folder_path, last_synced_at, sync_status
+    2. Add columns to bid_documents: dropbox_path, sync_action
+    """
+    # 1. Dropbox folder linking on active_bids
+    for stmt in [
+        "ALTER TABLE active_bids ADD COLUMN dropbox_folder_path TEXT",
+        "ALTER TABLE active_bids ADD COLUMN last_synced_at DATETIME",
+        "ALTER TABLE active_bids ADD COLUMN sync_status TEXT DEFAULT 'never'",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # 2. Dropbox origin tracking on bid_documents
+    for stmt in [
+        "ALTER TABLE bid_documents ADD COLUMN dropbox_path TEXT",
+        "ALTER TABLE bid_documents ADD COLUMN sync_action TEXT",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    conn.execute("UPDATE schema_version SET version = '2.10'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1395,6 +1431,9 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.8"
             if current == "2.8":
                 _migrate_2_8_to_2_9(conn)
+                current = "2.9"
+            if current == "2.9":
+                _migrate_2_9_to_2_10(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:
