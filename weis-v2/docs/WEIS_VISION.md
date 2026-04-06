@@ -57,11 +57,11 @@ Every completed project feeds back into the intelligence layer. HeavyJob actuals
 
 ### Purpose
 
-Build the most complete institutional memory possible by indexing four primary data sources that together provide a 360-degree view of every past project. This is the foundation that every subsequent phase draws from.
+Build the most complete institutional memory possible by indexing the primary data sources that together provide a comprehensive view of every past project. This is the foundation that every subsequent phase draws from.
 
 ### Current State
 
-Phase 1 is approximately 70% complete. The HeavyJob integration, PM Context Interview, Diary Import & Synthesis, Document Intelligence (manual upload), Rate Settings & Cost Recalculation, and the general-purpose AI Chat are all built and functional. What remains is HeavyBid integration, Dropbox automation, Bill.com integration, and chat improvements.
+Phase 1 is approximately 85% complete as of April 2026. The HeavyJob integration, HeavyBid integration (partial sync), PM Context Interview, Diary Import & Synthesis, Document Intelligence (manual upload), Rate Settings & Cost Recalculation, and the general-purpose AI Chat are all built and functional. Dropbox automation remains on hold pending API credential approval. Bill.com integration has been permanently removed (credentials denied due to accounting liability concerns). The team considers Phase 1 sufficiently complete to begin Phase 2 (Bidding Platform).
 
 ### Data Source 1: HCSS HeavyJob (Built)
 
@@ -82,7 +82,7 @@ Phase 1 is approximately 70% complete. The HeavyJob integration, PM Context Inte
 - Diary parser (state machine) importing foreman notes from HeavyJob diary exports
 - AI synthesis of diary entries into structured PM context using Claude Haiku
 
-### Data Source 2: HCSS HeavyBid (Needs to Be Built)
+### Data Source 2: HCSS HeavyBid (Built — Partial Sync)
 
 **What it provides:** The estimated bid structure — what was planned and priced before the work started.
 
@@ -98,7 +98,11 @@ Phase 1 is approximately 70% complete. The HeavyJob integration, PM Context Inte
 
 2. **Activity template library.** The activity structures from past bids become the recommended framework for new bids. For example, if Wollam is fusing pipe, the system can show that every past pipe bid included three activities: fusing, dig-lay-backfill, and buy pipe materials. This standardizes bid structure across estimators and across projects.
 
-**Implementation approach:** Integrate with the HCSS HeavyBid API to pull bid structures (bid items, activities, resources) and link them to jobs already in the database. Store in new database tables that mirror HeavyBid's hierarchy (bid → bid items → activities → resources).
+**Current implementation:**
+- Complete HCSS HeavyBid API integration in `app/hcss/heavybid.py` and `app/api/estimates.py`
+- Database tables: `hb_estimate`, `hb_biditem`, `hb_activity`, `hb_resource` (full hierarchy)
+- Selective sync from HCSS API — a handful of projects synced, full systematic sync pending
+- Frontend UI for browsing estimates, bid items, activities, and resources
 
 ### Data Source 3: Dropbox Project Documents (Partially Built — Needs Automation)
 
@@ -125,18 +129,9 @@ Phase 1 is approximately 70% complete. The HeavyJob integration, PM Context Inte
 - Automate the association of documents to jobs based on folder structure and naming conventions
 - Eliminate the need for PMs to manually upload documents — the system should pull from Dropbox automatically
 
-### Data Source 4: Bill.com Invoices (Needs to Be Built)
+### ~~Data Source 4: Bill.com Invoices~~ (REMOVED)
 
-**What it provides:** Real material costs from vendor and subcontractor invoices.
-
-- Material pricing tied to specific cost codes and job numbers
-- Vendor and subcontractor invoice amounts
-- Actual material cost per unit for items like pipe, concrete, steel, aggregates
-- Historical pricing trends over time
-
-**Why this matters:** HeavyJob tracks labor and equipment costs, but material pricing lives in the accounting/invoicing system. Bill.com is where Wollam processes all incoming invoices from vendors and subcontractors. Each invoice is already coded to a cost code and job number that matches the projects in WEIS. Integrating Bill.com closes the material cost gap and means the system can answer questions like "what do we typically pay for carbon steel pipe per linear foot" with real invoice data, not estimates.
-
-**Implementation approach:** Integrate with the Bill.com API to pull invoices by job code and cost code. Parse invoice line items and associate material costs with the corresponding cost codes in the WEIS database. Store in new database tables (e.g., `vendor_invoice`, `invoice_line_item`).
+**Status:** Permanently removed from scope as of April 2026. API credentials were denied by management due to liability concerns associated with exposing accounting software to this platform. All Bill.com integration code has been removed from the codebase. Material cost intelligence will need to come from alternative sources (manual entry, HeavyJob cost code data, or future vendor integrations).
 
 ### PM Context Interview (Built)
 
@@ -423,28 +418,32 @@ Every completed project makes WEIS smarter and more valuable for the next bid. T
 | Component | Status | Technology |
 |-----------|--------|------------|
 | HeavyJob API Integration | Built | Python httpx, OAuth 2.0 |
-| HeavyBid API Integration | Needs to be built | HCSS API (TBD) |
-| Dropbox Automated Scanning | Partially built (CLI) | Python, needs REST API + scheduler |
+| HeavyBid API Integration | Built (partial sync) | HCSS HeavyBid API, selective sync |
+| Dropbox Automated Scanning | On hold (needs credentials) | Python CLI scanner built, REST API + RAG pending |
 | RAG Database | Needs to be built | Vector embeddings (TBD — likely ChromaDB or similar) |
-| Bill.com API Integration | Needs to be built | Bill.com API |
+| ~~Bill.com API Integration~~ | REMOVED | Credentials denied — liability concerns |
 | PM Context Interview | Built | FastAPI + vanilla JS |
 | Diary Import & Synthesis | Built | State machine parser + Claude Haiku |
 | Document Intelligence | Built (manual upload) | PDF/Excel/CSV extraction + Claude enrichment |
 | Rate Settings & Cost Recalc | Built | SQLite + calculation engine |
-| General-Purpose AI Chat | Built (needs improvements) | Claude API + FastAPI |
-| Database | Built (schema v2.6) | SQLite |
+| General-Purpose AI Chat | Built (improved) | Claude API + FastAPI |
+| Database | Built (schema v2.8) | SQLite |
 | Frontend | Built | Vanilla JS + Tailwind CSS |
 
-### Phase 2 Components
+### Phase 2 Components — Bidding Platform
 
 | Component | Status | Technology |
 |-----------|--------|------------|
-| Document Control Agent | Needs to be built | Dropbox API watch + document diffing |
-| QA/QC Manager Agent | Needs to be built | Claude API + spec parsing |
-| Legal/Contract Analyst Agent | Needs to be built | Claude API + contract parsing |
-| Subcontract Manager Agent | Needs to be built | Claude API + scope packaging |
-| Inter-Agent Communication | Needs to be designed | Shared data model on bid schedule |
-| Bid Schedule of Values Parser | Needs to be built | Document extraction + structured mapping |
+| **Layer 1: Bid Board + Data Model** | Built (April 2026) | FastAPI + SQLite + vanilla JS |
+| Bid Schedule of Values Parser | Built | Claude Haiku + document extraction |
+| Document Management System | Built | File upload + text extraction + drag-and-drop |
+| Pricing Groups (Holding Accounts) | Built | Database grouping model |
+| **Layer 2: Agent Intelligence** | Needs to be designed | — |
+| Chief Estimator Agent (orchestrator) | Needs to be built | Claude API + routing logic |
+| Document Control Sub-Agent | Needs to be built | Document diffing + change tracking |
+| QA/QC Manager Sub-Agent | Needs to be built | Claude API + spec parsing |
+| Legal/Contract Analyst Sub-Agent | Needs to be built | Claude API + contract parsing |
+| Subcontract Manager Sub-Agent | Needs to be built | Claude API + scope packaging + DOCX generation |
 
 ### Phase 3 Components
 
@@ -466,15 +465,25 @@ Every completed project makes WEIS smarter and more valuable for the next bid. T
 
 ---
 
-## Immediate Next Steps (Phase 1 Completion)
+## Immediate Next Steps (Phase 2 — Bidding Platform)
 
-These are the remaining items to complete Phase 1 before moving to Phase 2:
+Phase 1 is considered sufficiently complete (April 2026). Dropbox automation may be revisited if API credentials are approved.
 
-1. **AI Chat Improvements** — Better source attribution and project referencing so estimators can trace data back to specific jobs clearly
-2. **HCSS HeavyBid API Integration** — Pull bid structures (bid items, activities, resources) and link to existing jobs
-3. **Dropbox Automation** — Move from CLI scanner to automated pipeline with REST API endpoints; build RAG database for semantic document search
-4. **Bill.com Integration** — API integration to pull invoices by job code and cost code for material pricing
-5. **Chat Multi-Source Querying** — Upgrade chat to query across all four data sources (HeavyJob, HeavyBid, Dropbox RAG, Bill.com) with clear source attribution
+### Layer 1 (Current Priority — spec at `docs/BIDDING_LAYER1_SPEC.md`)
+1. **Bid Board + Bid CRUD** — Create/manage active bid projects with deadlines and status tracking
+2. **Bid Schedule of Values** — Upload owner bid schedules, AI-parse into structured line items, pricing group support
+3. **Document Management** — Upload, categorize, and organize RFP documents by addendum with text extraction
+
+### Layer 2 (Next — requires Layer 1 complete)
+4. **Chief Estimator Agent** — Single chat interface that orchestrates specialized sub-agents per bid
+5. **Document Control Sub-Agent** — Catalog documents, diff addendums, track changes, propagate updates
+6. **QA/QC Manager Sub-Agent** — Parse specs, identify testing/quality requirements, map to bid items
+7. **Legal/Contract Analyst Sub-Agent** — Analyze contract risk, LD clauses, bonding, bid type, payment terms
+8. **Subcontract Manager Sub-Agent** — Build scope packages (Word docs), track sub bids, manage clarifications
+
+### Phase 1 Remaining (On Hold)
+9. **Dropbox Automation + RAG** — Pending API credential approval. Would enable semantic search across all project documents.
+10. **Chat Multi-Source Querying** — Upgrade chat to query HeavyBid data alongside HeavyJob; add RAG when available
 
 ---
 

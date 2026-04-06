@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.7"
+SCHEMA_VERSION = "2.9"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -1247,6 +1247,80 @@ def _migrate_2_6_to_2_7(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.7'")
 
 
+def _migrate_2_7_to_2_8(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.7 to 2.8: Bidding Platform Layer 1.
+
+    Changes:
+    1. Add columns to active_bids: bid_due_time, description, contact_name, contact_email
+    2. Add columns to bid_documents: addendum_number, date_received, file_path, extracted_text, notes
+    3. Create pricing_group table
+    4. Add pricing_group_id column to bid_sov_item
+    """
+    # 1. New columns on active_bids
+    for col_sql in [
+        "ALTER TABLE active_bids ADD COLUMN bid_due_time TEXT",
+        "ALTER TABLE active_bids ADD COLUMN description TEXT",
+        "ALTER TABLE active_bids ADD COLUMN contact_name TEXT",
+        "ALTER TABLE active_bids ADD COLUMN contact_email TEXT",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # 2. New columns on bid_documents
+    for col_sql in [
+        "ALTER TABLE bid_documents ADD COLUMN addendum_number INTEGER DEFAULT 0",
+        "ALTER TABLE bid_documents ADD COLUMN date_received DATE",
+        "ALTER TABLE bid_documents ADD COLUMN file_path TEXT",
+        "ALTER TABLE bid_documents ADD COLUMN extracted_text TEXT",
+        "ALTER TABLE bid_documents ADD COLUMN notes TEXT",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # 3. Create pricing_group table
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS pricing_group (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id      INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        description TEXT,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pricing_group_bid ON pricing_group(bid_id);
+    """)
+
+    # 4. Add pricing_group_id to bid_sov_item
+    try:
+        conn.execute("ALTER TABLE bid_sov_item ADD COLUMN pricing_group_id INTEGER REFERENCES pricing_group(id)")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    conn.execute("UPDATE schema_version SET version = '2.8'")
+
+
+def _migrate_2_8_to_2_9(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.8 to 2.9: Per diem on pm_context.
+
+    New columns on pm_context:
+    - has_per_diem (INTEGER/boolean) — whether this job includes per diem
+    - per_diem_rate (REAL) — daily per diem rate per worker (e.g., 75.00)
+    """
+    for stmt in [
+        "ALTER TABLE pm_context ADD COLUMN has_per_diem INTEGER DEFAULT 0",
+        "ALTER TABLE pm_context ADD COLUMN per_diem_rate REAL",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    conn.execute("UPDATE schema_version SET version = '2.9'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1315,6 +1389,12 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.6"
             if current == "2.6":
                 _migrate_2_6_to_2_7(conn)
+                current = "2.7"
+            if current == "2.7":
+                _migrate_2_7_to_2_8(conn)
+                current = "2.8"
+            if current == "2.8":
+                _migrate_2_8_to_2_9(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

@@ -10,7 +10,7 @@ Syncs ALL available data in the optimal order:
     (adaptive pacing, resume support)
   Phase 3: Aggregate actuals + regenerate rate cards
 
-Run: PYTHONUNBUFFERED=1 python scripts/sync_everything.py [--phase 1|2|3|all] [--force-resync]
+Run: PYTHONUNBUFFERED=1 python scripts/sync_everything.py [--phase 1|2|3|all] [--force-resync] [--job 8522]
 
 Options:
   --phase 1        Only sync bulk reference data
@@ -18,6 +18,7 @@ Options:
   --phase 3        Only aggregate + regenerate
   --phase all      Do everything (default)
   --force-resync   Re-sync ALL timecard jobs, even those already synced with equipment data
+  --job NUMBER     Re-sync ONLY this job number (forces resync regardless of current state)
 """
 
 import argparse
@@ -445,7 +446,10 @@ async def fetch_timecard_summaries(http, headers, hcss_job_id):
 
 
 async def fetch_details_concurrent(http, headers, tc_ids):
-    """Fetch timecard details concurrently. Returns (labor_rows, equip_rows)."""
+    """Fetch timecard details concurrently. Returns (labor_rows, equip_rows).
+
+    Refreshes the HCSS token every 500 requests to avoid mid-job 401 expiry.
+    """
     sem = asyncio.Semaphore(current_concurrency)
     results = {}
 
@@ -459,6 +463,17 @@ async def fetch_details_concurrent(http, headers, tc_ids):
     for chunk_start in range(0, len(tc_ids), chunk_size):
         chunk_end = min(chunk_start + chunk_size, len(tc_ids))
         chunk = tc_ids[chunk_start:chunk_end]
+
+        # Refresh token every 500 requests to prevent mid-job 401 expiry
+        if chunk_start > 0 and chunk_start % 500 == 0 and auth_global:
+            try:
+                auth_global._access_token = None
+                auth_global._token_expires_at = 0
+                token = await auth_global.get_token()
+                headers["Authorization"] = f"Bearer {token}"
+                print(f"    Token refreshed at {chunk_start}/{len(tc_ids)}", flush=True)
+            except Exception as e:
+                print(f"    Token refresh failed: {e}", flush=True)
 
         tasks = [fetch_one(chunk_start + j, tid) for j, tid in enumerate(chunk)]
         await asyncio.gather(*tasks)
@@ -475,39 +490,51 @@ async def fetch_details_concurrent(http, headers, tc_ids):
     return flat_rows, equip_rows
 
 
-async def resync_timecards(http, headers, force_all=False):
-    """Re-sync all timecards to get employee_code + equipment data."""
+async def resync_timecards(http, headers, force_all=False, single_job=None):
+    """Re-sync all timecards to get employee_code + equipment data.
+
+    Args:
+        single_job: If set, only resync this job number (forces resync).
+    """
     global rate_limit_hits, current_concurrency, current_delay, jobs_since_last_429
 
     print("\n--- TIMECARD RE-SYNC ---", flush=True)
 
     conn = get_connection()
     try:
-        jobs = conn.execute("""
-            SELECT job_id, hcss_job_id, job_number, name
-            FROM job
-            WHERE job_number GLOB '[0-9]*'
-              AND CAST(job_number AS INTEGER) >= 8400
-              AND hcss_job_id IS NOT NULL
-            ORDER BY job_number
-        """).fetchall()
-
-        if force_all:
-            # Re-sync everything
+        if single_job:
+            jobs = conn.execute("""
+                SELECT job_id, hcss_job_id, job_number, name
+                FROM job
+                WHERE job_number = ? AND hcss_job_id IS NOT NULL
+            """, (single_job,)).fetchall()
+            if not jobs:
+                print(f"  Job {single_job} not found!", flush=True)
+                return 0
             remaining = list(jobs)
-            print(f"  Force re-sync: ALL {len(remaining)} jobs", flush=True)
+            print(f"  Single-job resync: {single_job} ({jobs[0]['name']})", flush=True)
         else:
-            # Only re-sync jobs that don't have pay_class_code data yet.
-            # A job is "re-synced" if it has ANY timecard row with pay_class_code populated.
-            # (This field is only set by the v1.9+ sync code, so old syncs are properly re-done.)
-            jobs_resynced = set(
-                r[0] for r in conn.execute(
-                    """SELECT DISTINCT job_id FROM hj_timecard
-                       WHERE pay_class_code IS NOT NULL AND pay_class_code != ''"""
-                ).fetchall()
-            )
-            remaining = [j for j in jobs if j["job_id"] not in jobs_resynced]
-            print(f"  Total jobs: {len(jobs)} | Already re-synced: {len(jobs_resynced)} | Need re-sync: {len(remaining)}", flush=True)
+            jobs = conn.execute("""
+                SELECT job_id, hcss_job_id, job_number, name
+                FROM job
+                WHERE job_number GLOB '[0-9]*'
+                  AND CAST(job_number AS INTEGER) >= 8400
+                  AND hcss_job_id IS NOT NULL
+                ORDER BY job_number
+            """).fetchall()
+
+            if force_all:
+                remaining = list(jobs)
+                print(f"  Force re-sync: ALL {len(remaining)} jobs", flush=True)
+            else:
+                jobs_resynced = set(
+                    r[0] for r in conn.execute(
+                        """SELECT DISTINCT job_id FROM hj_timecard
+                           WHERE pay_class_code IS NOT NULL AND pay_class_code != ''"""
+                    ).fetchall()
+                )
+                remaining = [j for j in jobs if j["job_id"] not in jobs_resynced]
+                print(f"  Total jobs: {len(jobs)} | Already re-synced: {len(jobs_resynced)} | Need re-sync: {len(remaining)}", flush=True)
     finally:
         conn.close()
 
@@ -684,7 +711,12 @@ async def main():
     parser = argparse.ArgumentParser(description="WEIS Mega Sync")
     parser.add_argument("--phase", default="all", choices=["1", "2", "3", "all"])
     parser.add_argument("--force-resync", action="store_true")
+    parser.add_argument("--job", type=str, default=None, help="Re-sync only this job number")
     args = parser.parse_args()
+
+    # --job implies phase 2+3 only
+    if args.job and args.phase == "all":
+        args.phase = "2"
 
     init_db()
 
@@ -733,7 +765,7 @@ async def main():
             print("PHASE 2: Timecard Re-Sync (employee_code + equipment)")
             print(f"{'='*70}")
 
-            await resync_timecards(http, headers, force_all=args.force_resync)
+            await resync_timecards(http, headers, force_all=args.force_resync, single_job=args.job)
 
         # Phase 3: Aggregate
         if args.phase in ("3", "all"):

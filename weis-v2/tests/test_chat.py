@@ -1,4 +1,4 @@
-"""Tests for AI Estimating Chat — signal detection, context assembly, API routes."""
+"""Tests for AI Estimating Chat — signal detection, context assembly, SQL tool, API routes."""
 
 import json
 import pytest
@@ -8,6 +8,7 @@ from app.services.chat import (
     detect_signals, search_rate_items, build_context_block,
     search_costcodes_direct, search_estimates, build_estimate_context,
 )
+from app.services.sql_tool import validate_query, execute_sql
 
 client = TestClient(app)
 
@@ -284,3 +285,139 @@ class TestChatAPI:
     def test_send_empty_message(self):
         res = client.post("/api/chat/send", json={"message": ""})
         assert res.status_code == 400
+
+
+# ── SQL Tool Validation Tests ──
+
+class TestSqlToolValidation:
+    def test_select_passes(self):
+        ok, err = validate_query("SELECT * FROM job LIMIT 5")
+        assert ok is True
+        assert err == ""
+
+    def test_select_with_joins_passes(self):
+        ok, err = validate_query("""
+            SELECT ri.act_mh_per_unit, j.job_number
+            FROM rate_item ri
+            JOIN rate_card rc ON ri.card_id = rc.card_id
+            JOIN job j ON rc.job_id = j.job_id
+            WHERE ri.discipline = 'concrete'
+            LIMIT 10
+        """)
+        assert ok is True
+
+    def test_with_cte_passes(self):
+        ok, err = validate_query("""
+            WITH top_jobs AS (
+                SELECT job_id, job_number FROM job LIMIT 5
+            )
+            SELECT * FROM top_jobs
+        """)
+        assert ok is True
+
+    def test_drop_rejected(self):
+        ok, err = validate_query("DROP TABLE job")
+        assert ok is False
+        assert "Blocked keyword" in err or "Only SELECT" in err
+
+    def test_delete_rejected(self):
+        ok, err = validate_query("DELETE FROM job WHERE job_id = 1")
+        assert ok is False
+
+    def test_update_rejected(self):
+        ok, err = validate_query("UPDATE job SET name = 'hacked' WHERE job_id = 1")
+        assert ok is False
+
+    def test_insert_rejected(self):
+        ok, err = validate_query("INSERT INTO job (job_number, name) VALUES ('9999', 'test')")
+        assert ok is False
+
+    def test_create_rejected(self):
+        ok, err = validate_query("CREATE TABLE evil (id INTEGER)")
+        assert ok is False
+
+    def test_attach_rejected(self):
+        ok, err = validate_query("ATTACH DATABASE 'other.db' AS other")
+        assert ok is False
+
+    def test_load_extension_rejected(self):
+        ok, err = validate_query("SELECT load_extension('evil.so')")
+        assert ok is False
+        assert "Blocked function" in err
+
+    def test_multiple_statements_rejected(self):
+        ok, err = validate_query("SELECT 1; DROP TABLE job")
+        assert ok is False
+
+    def test_empty_query_rejected(self):
+        ok, err = validate_query("")
+        assert ok is False
+
+    def test_comment_stripping(self):
+        ok, err = validate_query("-- This is a comment\nSELECT 1")
+        assert ok is True
+
+    def test_pragma_rejected(self):
+        ok, err = validate_query("PRAGMA table_info(job)")
+        assert ok is False
+
+
+# ── SQL Tool Execution Tests ──
+
+class TestSqlToolExecution:
+    def test_basic_query_returns_results(self):
+        result = execute_sql("SELECT job_id, job_number, name FROM job LIMIT 3")
+        assert result["error"] is None
+        assert result["row_count"] > 0
+        assert "job_id" in result["columns"]
+        assert "job_number" in result["columns"]
+
+    def test_row_limit_enforced(self):
+        result = execute_sql("SELECT * FROM hj_costcode", row_limit=5)
+        assert result["error"] is None
+        assert result["row_count"] <= 5
+        assert result["truncated"] is True  # 15K rows, only 5 returned
+
+    def test_invalid_query_returns_error(self):
+        result = execute_sql("SELECT * FROM nonexistent_table")
+        assert result["error"] is not None
+        assert "no such table" in result["error"]
+
+    def test_blocked_query_returns_error(self):
+        result = execute_sql("DROP TABLE job")
+        assert result["error"] is not None
+
+    def test_empty_result(self):
+        result = execute_sql("SELECT * FROM job WHERE job_number = 'ZZZZZ'")
+        assert result["error"] is None
+        assert result["row_count"] == 0
+        assert result["rows"] == []
+
+    def test_long_text_truncated(self):
+        """Long text values should be truncated to MAX_TEXT_LEN."""
+        result = execute_sql(
+            "SELECT project_summary FROM pm_context WHERE LENGTH(project_summary) > 500 LIMIT 1"
+        )
+        if result["row_count"] > 0:
+            val = result["rows"][0][0]
+            assert len(val) <= 503  # 500 + "..."
+
+    def test_aggregate_query(self):
+        result = execute_sql("SELECT COUNT(*) as cnt FROM job")
+        assert result["error"] is None
+        assert result["row_count"] == 1
+        assert result["rows"][0][0] > 0
+
+    def test_join_query(self):
+        result = execute_sql("""
+            SELECT j.job_number, COUNT(cc.cc_id) as cc_count
+            FROM job j
+            JOIN hj_costcode cc ON j.job_id = cc.job_id
+            GROUP BY j.job_id
+            ORDER BY cc_count DESC
+            LIMIT 3
+        """)
+        assert result["error"] is None
+        assert result["row_count"] > 0
+        assert "job_number" in result["columns"]
+        assert "cc_count" in result["columns"]

@@ -13,6 +13,7 @@ STATIC_DIR = PROJECT_ROOT / "static"
 DIARY_DIR = PROJECT_ROOT / "Heavy Job Notes"
 COST_REPORT_DIR = PROJECT_ROOT / "Heavy Job Cost Report"
 DOCUMENTS_DIR = PROJECT_ROOT / "data" / "documents"
+BID_DOCUMENTS_DIR = PROJECT_ROOT / "data" / "bid_documents"
 
 # Dropbox (read-only document source)
 DROPBOX_ROOT = Path(os.getenv(

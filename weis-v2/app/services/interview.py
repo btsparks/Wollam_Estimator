@@ -7,9 +7,242 @@ All database queries live here; the API layer is a thin wrapper.
 from __future__ import annotations
 
 import json
+import re
+from collections import defaultdict
 from datetime import datetime
 
 from app.database import get_connection
+
+
+# ── Trade simplification ──
+# Order matters: OEF (Union Foreman) must match before OE* (Operator)
+TRADE_GROUPS: list[tuple[str, list[str]]] = [
+    ("Crane Operator", ["CRANE"]),
+    ("Foreman", ["FORE", "GFORE", "OEF"]),
+    ("Operator", ["OE", "OPER"]),
+    ("Laborer", ["LAB", "TEMPL"]),
+    ("Carpenter", ["CARP", "TEMPC"]),
+    ("Iron Worker", ["IRON"]),
+    ("Pipe Fitter", ["PIPE"]),
+    ("Welder", ["WELD"]),
+    ("Superintendent", ["SUP"]),
+]
+
+# Overhead trades excluded from crew display (not production crew)
+OVERHEAD_TRADES = {"Safety", "Engineer", "Project Manager", "Field Clerk", "Maintenance"}
+
+# Minimum presence to include in typical crew (30% of work days)
+CREW_PRESENCE_THRESHOLD = 0.30
+
+
+def simplify_trade(pay_class_code: str) -> str:
+    """Map a pay_class_code to a simplified trade group name."""
+    if not pay_class_code:
+        return "Other"
+    code = pay_class_code.upper().strip()
+    for group_name, prefixes in TRADE_GROUPS:
+        for prefix in prefixes:
+            if code == prefix or code.startswith(prefix):
+                return group_name
+    # Fallback for unmatched codes
+    overhead_map = {
+        "SAFE": "Safety", "SAFETY": "Safety", "ENG": "Engineer",
+        "PM": "Project Manager", "CLERK": "Field Clerk",
+        "MAIN": "Maintenance", "TEMP": "Other",
+    }
+    return overhead_map.get(code, code)
+
+
+# ── Equipment simplification ──
+EQUIPMENT_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("Mini Excavator", ["mini excavator", "mini exc"]),
+    ("Excavator", ["excavator"]),
+    ("Crane", ["crane"]),
+    ("Forklift", ["forklift", "fork lift", "telehandler"]),
+    ("Dozer", ["dozer", "bulldozer", "smart grade doz"]),
+    ("Loader", ["loader"]),
+    ("Scraper", ["scraper"]),
+    ("Grader", ["grader"]),
+    ("Haul Truck", ["haul truck", "haul", "articulated", "artic truck", "dump"]),
+    ("Water Truck", ["water truck"]),
+    ("Skid Steer", ["skid steer", "skidsteer"]),
+    ("Welder", ["welder", "welding"]),
+    ("Light Tower", ["light tower"]),
+    ("Compactor", ["compactor", "roller"]),
+    ("Generator", ["generator"]),
+    ("Pump", ["pump"]),
+    ("Paver", ["paver"]),
+    ("Trencher", ["trencher"]),
+    ("Concrete", ["concrete", "mixer"]),
+]
+
+# Equipment categories filtered out of crew display (support/transport, not production)
+EXCLUDED_EQUIPMENT = {"Pickup", "Van", "Trailer", "Flatbed", "Lube Truck", "Enclosed", "Vehicle"}
+
+_PICKUP_RE = re.compile(
+    r"\bf-?(?:150|250|350|450|550)\b|\bsierra\b|\b(?:2500|3500)\s*(?:hd|gmc)?\b|\bchevrolet\b",
+    re.IGNORECASE,
+)
+
+
+def simplify_equipment_name(desc: str) -> str:
+    """Simplify an equipment description to a general category."""
+    if not desc:
+        return "Equipment"
+    # Bare year string (e.g., "2019") — can't categorize
+    if re.match(r"^\d{4}$", desc.strip()):
+        return "Vehicle"
+    lower = desc.lower()
+
+    # Check for parenthesized category (HCSS common pattern: "PC 360 - Komatsu (Excavator)")
+    paren = re.search(r"\(([^)]+)\)", desc)
+    if paren:
+        cat = paren.group(1).strip().lower()
+        if "mini" in cat and "excavator" in cat:
+            return "Mini Excavator"
+        if "excavator" in cat:
+            return "Excavator"
+        if "loader" in cat:
+            return "Loader"
+        if "dozer" in cat:
+            return "Dozer"
+        if "skid" in cat:
+            return "Skid Steer"
+        if "truck" in cat or "artic" in cat:
+            return "Haul Truck"
+        if "crane" in cat:
+            return "Crane"
+        if "grader" in cat:
+            return "Grader"
+        if "scraper" in cat:
+            return "Scraper"
+        # "HD 785 (100 Ton)" = Haul Truck, generic "(X Ton)" = Crane
+        if "ton" in cat:
+            if re.search(r"\bhd\b|\bdump\b|\bhaul\b|\bartic", lower):
+                return "Haul Truck"
+            return "Crane"
+        return paren.group(1).strip()
+
+    # Pickups / utility trucks
+    if _PICKUP_RE.search(desc):
+        if "flatbed" in lower:
+            return "Flatbed"
+        return "Pickup"
+
+    # Vans
+    if re.search(r"\bvan\b", lower) or re.search(r"\be-?350\b.*econoline", lower):
+        return "Van"
+
+    # Trailers / enclosed
+    if re.search(r"\btrailer\b|\benclosed\b|\blowboy\b", lower):
+        return "Trailer"
+
+    # Lube trucks
+    if "lube" in lower:
+        return "Lube Truck"
+
+    # Keyword-based matching
+    for category, keywords in EQUIPMENT_KEYWORDS:
+        for kw in keywords:
+            if kw in lower:
+                return category
+
+    # Tonnage pattern → likely crane ("130 Ton - Linkbelt", "80 Ton - Grove")
+    if re.search(r"\d+\s*ton\b", lower):
+        return "Crane"
+
+    # Bobcat without other context → Skid Steer
+    if "bobcat" in lower:
+        return "Skid Steer"
+
+    return desc
+
+
+def _build_crew_breakdown(
+    conn, job_id: int, work_days_by_cc: dict[str, int]
+) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
+    """Build simplified crew breakdowns for all cost codes in a job.
+
+    Returns (trade_breakdown, equip_breakdown) dictionaries keyed by cost code.
+    Each value is a list of {name, avg_count, days_present} dicts, filtered to
+    trades/equipment present on >= CREW_PRESENCE_THRESHOLD of work days.
+    """
+
+    # ── Trades: daily worker counts per trade per cost code ──
+    trade_rows = conn.execute("""
+        SELECT cost_code, pay_class_code, date,
+               COUNT(DISTINCT employee_name) as workers
+        FROM hj_timecard
+        WHERE job_id = ? AND pay_class_code IS NOT NULL AND pay_class_code != ''
+        GROUP BY cost_code, pay_class_code, date
+    """, (job_id,)).fetchall()
+
+    # {cost_code: {trade_group: {date: worker_count}}}
+    trade_daily: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(int))
+    )
+    for row in trade_rows:
+        group = simplify_trade(row["pay_class_code"])
+        if group in OVERHEAD_TRADES or group == "Other":
+            continue
+        trade_daily[row["cost_code"]][group][row["date"]] += row["workers"]
+
+    trade_breakdown: dict[str, list[dict]] = {}
+    for cc_code, groups in trade_daily.items():
+        wd = work_days_by_cc.get(cc_code, 1)
+        items = []
+        for name, daily_counts in groups.items():
+            days_present = len(daily_counts)
+            presence = days_present / wd if wd > 0 else 0
+            if presence < CREW_PRESENCE_THRESHOLD:
+                continue
+            avg_count = sum(daily_counts.values()) / days_present
+            items.append({
+                "name": name,
+                "avg_count": round(avg_count),
+                "days_present": days_present,
+            })
+        items.sort(key=lambda x: x["days_present"], reverse=True)
+        trade_breakdown[cc_code] = items
+
+    # ── Equipment: daily unit counts per simplified name per cost code ──
+    equip_rows = conn.execute("""
+        SELECT cost_code, equipment_desc, date,
+               COUNT(DISTINCT equipment_code) as unit_count
+        FROM hj_equipment_entry
+        WHERE job_id = ?
+        GROUP BY cost_code, equipment_desc, date
+    """, (job_id,)).fetchall()
+
+    # {cost_code: {simplified_name: {date: unit_count}}}
+    equip_daily: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(int))
+    )
+    for row in equip_rows:
+        name = simplify_equipment_name(row["equipment_desc"])
+        if name in EXCLUDED_EQUIPMENT:
+            continue
+        equip_daily[row["cost_code"]][name][row["date"]] += row["unit_count"]
+
+    equip_breakdown: dict[str, list[dict]] = {}
+    for cc_code, categories in equip_daily.items():
+        wd = work_days_by_cc.get(cc_code, 1)
+        items = []
+        for name, daily_counts in categories.items():
+            days_present = len(daily_counts)
+            presence = days_present / wd if wd > 0 else 0
+            if presence < CREW_PRESENCE_THRESHOLD:
+                continue
+            avg_count = sum(daily_counts.values()) / days_present
+            items.append({
+                "name": name,
+                "avg_count": round(avg_count),
+                "days_present": days_present,
+            })
+        items.sort(key=lambda x: x["days_present"], reverse=True)
+        equip_breakdown[cc_code] = items
+
+    return trade_breakdown, equip_breakdown
 
 
 def get_jobs_with_interview_status() -> list[dict]:
@@ -222,49 +455,25 @@ def get_job_interview_detail(job_id: int) -> dict | None:
             ORDER BY cc.act_labor_hrs DESC
         """, (job_id,)).fetchall()
 
-        # Build trade-based crew breakdown from timecards (batch query)
-        trade_rows = conn.execute("""
-            SELECT cost_code,
-                   pay_class_code,
-                   COUNT(DISTINCT employee_name) as workers,
-                   COUNT(DISTINCT date) as days,
-                   ROUND(SUM(hours), 1) as total_hrs
-            FROM hj_timecard
-            WHERE job_id = ? AND pay_class_code IS NOT NULL AND pay_class_code != ''
-            GROUP BY cost_code, pay_class_code
-            ORDER BY cost_code, total_hrs DESC
-        """, (job_id,)).fetchall()
-
-        # Build lookup: {cost_code: {trade: {workers, days, hours}}}
-        trade_breakdown = {}
-        for tr in trade_rows:
-            cc_code = tr["cost_code"]
-            if cc_code not in trade_breakdown:
-                trade_breakdown[cc_code] = {}
-            trade_breakdown[cc_code][tr["pay_class_code"]] = {
-                "workers": tr["workers"],
-                "days": tr["days"],
-                "hours": tr["total_hrs"],
-            }
-
-        # Build equipment breakdown from rate_item crew_breakdown (equipment key)
-        equip_lookup = {}
-        for cc_row in cost_codes:
-            if cc_row["crew_breakdown"]:
-                try:
-                    cb = json.loads(cc_row["crew_breakdown"])
-                    if cb.get("equipment"):
-                        equip_lookup[cc_row["code"]] = cb["equipment"]
-                except (json.JSONDecodeError, TypeError):
-                    pass
+        # Build simplified crew breakdowns (trades + equipment)
+        work_days_by_cc = {
+            cc["code"]: cc["work_days"] or 1 for cc in cost_codes
+        }
+        trade_breakdown, equip_breakdown = _build_crew_breakdown(
+            conn, job_id, work_days_by_cc
+        )
 
         formatted_codes = []
         for cc in cost_codes:
             cc = dict(cc)
-            # Crew breakdown: trades from timecards, equipment from rate_item
+            trades_list = trade_breakdown.get(cc["code"], [])
+            equip_list = equip_breakdown.get(cc["code"], [])
+            # Compute typical daily crew from consistent trades
+            typical_crew_size = sum(t["avg_count"] for t in trades_list)
             crew = {
-                "trades": trade_breakdown.get(cc["code"], {}),
-                "equipment": equip_lookup.get(cc["code"], []),
+                "trades": trades_list,
+                "equipment": equip_list,
+                "typical_crew_size": typical_crew_size,
             }
 
             # Build context sub-object (None if no context exists)
@@ -380,8 +589,8 @@ def save_job_context(job_id: int, data: dict) -> dict:
         conn.execute("""
             INSERT INTO pm_context (job_id, pm_name, project_summary, site_conditions,
                                     key_challenges, key_successes, lessons_learned,
-                                    general_notes, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    general_notes, has_per_diem, per_diem_rate, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(job_id) DO UPDATE SET
                 pm_name = COALESCE(excluded.pm_name, pm_context.pm_name),
                 project_summary = COALESCE(excluded.project_summary, pm_context.project_summary),
@@ -390,6 +599,8 @@ def save_job_context(job_id: int, data: dict) -> dict:
                 key_successes = COALESCE(excluded.key_successes, pm_context.key_successes),
                 lessons_learned = COALESCE(excluded.lessons_learned, pm_context.lessons_learned),
                 general_notes = COALESCE(excluded.general_notes, pm_context.general_notes),
+                has_per_diem = excluded.has_per_diem,
+                per_diem_rate = excluded.per_diem_rate,
                 updated_at = excluded.updated_at
         """, (
             job_id,
@@ -400,6 +611,8 @@ def save_job_context(job_id: int, data: dict) -> dict:
             data.get("key_successes"),
             data.get("lessons_learned"),
             data.get("general_notes"),
+            1 if data.get("has_per_diem") else 0,
+            data.get("per_diem_rate"),
             now,
         ))
         conn.commit()

@@ -5,7 +5,7 @@
 
 // ── State ──
 const state = {
-    currentPage: 'interview',
+    currentPage: 'jobs',
     currentJobId: null,
     jobs: [],
     jobDetail: null,
@@ -24,6 +24,10 @@ const state = {
     chatMessages: [],
     chatLoading: false,
     chatDataSummary: null,
+    // Bidding state
+    biddingStatusFilter: 'all',
+    biddingTab: 'overview',
+    biddingSovPreview: null,
 };
 
 // ── API Helpers ──
@@ -66,9 +70,9 @@ function navigate(page, jobId = null) {
         a.classList.toggle('active', a.dataset.page === page);
     });
 
-    if (page === 'interview' && jobId) {
+    if (page === 'jobs' && jobId) {
         loadJobDetail(jobId);
-    } else if (page === 'interview') {
+    } else if (page === 'jobs') {
         loadJobList();
     } else if (page === 'chat') {
         renderChat();
@@ -76,6 +80,10 @@ function navigate(page, jobId = null) {
         loadEstimateDetail(jobId);
     } else if (page === 'estimates') {
         loadEstimateList();
+    } else if (page === 'bidding' && jobId) {
+        loadBidDetail(jobId);
+    } else if (page === 'bidding') {
+        loadBidBoard();
     } else if (page === 'settings') {
         renderSettings();
     }
@@ -124,8 +132,8 @@ function jobStatusBadge(status) {
 // ── Load Job List ──
 async function loadJobList() {
     const content = document.getElementById('content');
-    document.getElementById('pageTitle').textContent = 'PM Context Interview';
-    document.getElementById('pageSubtitle').textContent = 'Capture institutional knowledge from your project managers';
+    document.getElementById('pageTitle').textContent = 'Jobs';
+    document.getElementById('pageSubtitle').textContent = '';
 
     content.innerHTML = '<div class="empty-state"><p>Loading jobs...</p></div>';
 
@@ -179,11 +187,11 @@ function renderJobList(jobs, progress) {
                 <div class="kpi-value">${fmt(p.total_jobs)}</div>
             </div>
             <div class="kpi-card card-animate">
-                <div class="kpi-label">Interviews Started</div>
+                <div class="kpi-label">Reviews Started</div>
                 <div class="kpi-value">${fmt(p.jobs_with_context)}</div>
             </div>
             <div class="kpi-card card-animate">
-                <div class="kpi-label">Interviews Complete</div>
+                <div class="kpi-label">Reviews Complete</div>
                 <div class="kpi-value">${fmt(p.jobs_complete)}</div>
             </div>
             <div class="kpi-card card-animate">
@@ -271,7 +279,7 @@ function renderJobTable(filtered) {
                         <th class="sortable" onclick="toggleSort('cost_code_count')" style="text-align: right;">Cost Codes ${sortIcon('cost_code_count')}</th>
                         <th class="sortable" onclick="toggleSort('cost_codes_with_data')" style="text-align: right;">With Data ${sortIcon('cost_codes_with_data')}</th>
                         <th style="text-align: center;">Estimate</th>
-                        <th class="sortable" onclick="toggleSort('interview_status')" style="text-align: center;">Interview ${sortIcon('interview_status')}</th>
+                        <th class="sortable" onclick="toggleSort('interview_status')" style="text-align: center;">Review ${sortIcon('interview_status')}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -280,7 +288,7 @@ function renderJobTable(filtered) {
                             ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(37,99,235,0.1);color:var(--wollam-blue);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="event.stopPropagation();navigate('estimates',${j.linked_estimate_id})">${escHtml(j.linked_estimate_code || 'HB')} &rarr;</span>`
                             : `<span style="color:var(--text-tertiary);font-size:11px;">—</span>`;
                         return `
-                        <tr class="data-row" onclick="navigate('interview', ${j.job_id})">
+                        <tr class="data-row" onclick="navigate('jobs', ${j.job_id})">
                             <td style="font-weight: 700; color: var(--wollam-navy);">${j.job_number}</td>
                             <td style="max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${j.name || '—'}</td>
                             <td style="text-align: center;">${jobStatusBadge(j.status)}</td>
@@ -333,7 +341,7 @@ function renderJobCard(job) {
         : 0;
 
     return `
-        <div class="card card-clickable card-animate" onclick="navigate('interview', ${job.job_id})">
+        <div class="card card-clickable card-animate" onclick="navigate('jobs', ${job.job_id})">
             <div class="job-card">
                 <div class="job-card-header">
                     <span class="job-number">Job ${job.job_number}</span>
@@ -401,7 +409,7 @@ function setSearch(q) {
     }
 }
 
-// ── Load Job Detail (Interview Page) ──
+// ── Load Job Detail (Jobs Page) ──
 async function loadJobDetail(jobId) {
     const content = document.getElementById('content');
     content.innerHTML = '<div class="empty-state"><p>Loading job detail...</p></div>';
@@ -447,7 +455,7 @@ function renderJobDetail(data) {
 
     content.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <button class="back-btn" onclick="navigate('interview')">
+            <button class="back-btn" onclick="navigate('jobs')">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
                 Back to Jobs
             </button>
@@ -650,6 +658,23 @@ function renderJobDetail(data) {
                         <textarea class="form-textarea" id="general_notes" placeholder="Anything else relevant..."
                             onblur="saveJobContext(${job.job_id})">${pm.general_notes || ''}</textarea>
                     </div>
+                    <div class="form-group" style="display: flex; align-items: center; gap: 16px;">
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--text-primary); cursor: pointer;">
+                            <input type="checkbox" id="has_per_diem" ${pm.has_per_diem ? 'checked' : ''}
+                                onchange="document.getElementById('per_diem_rate').disabled = !this.checked; saveJobContext(${job.job_id})"
+                                style="width: 16px; height: 16px; accent-color: var(--wollam-navy);">
+                            Per Diem
+                        </label>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="font-size: 13px; color: var(--text-secondary);">$</span>
+                            <input type="number" class="form-input" id="per_diem_rate"
+                                placeholder="75.00" step="0.01" min="0" style="width: 100px;"
+                                value="${pm.per_diem_rate || ''}"
+                                ${pm.has_per_diem ? '' : 'disabled'}
+                                onblur="saveJobContext(${job.job_id})">
+                            <span style="font-size: 12px; color: var(--text-tertiary);">/day per worker</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -692,7 +717,7 @@ function renderJobDetail(data) {
         <div style="text-align: center; padding: 32px 0; border-top: 1px solid var(--border-default); margin-top: 24px;">
             <button class="btn btn-gold" onclick="markComplete(${job.job_id})" style="font-size: 15px; padding: 12px 32px;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                Mark Interview Complete
+                Mark Review Complete
             </button>
         </div>
     `;
@@ -769,45 +794,34 @@ function renderCostCodeDetail(cc, jobId) {
 
     const ctx = cc.context || {};
     const cb = cc.crew_breakdown || {};
-    const trades = cb.trades || {};
-    const equipment = cb.equipment || [];
-    const workDays = cc.work_days || 1;
+    const rawTrades = cb.trades || [];
+    const equipment = Array.isArray(cb.equipment) ? cb.equipment : [];
+
+    // Normalize trades: new format is array [{name, avg_count}], old format was dict {CODE: {workers, days}}
+    const trades = Array.isArray(rawTrades)
+        ? rawTrades
+        : Object.entries(rawTrades).map(([code, info]) => ({
+            name: code,
+            avg_count: info.workers || 1,
+            days_present: info.days || 0,
+        }));
 
     let crewHtml = '';
-    if (Object.keys(trades).length > 0) {
-        // Calculate avg workers per day for each trade, filter out fringe (<20% presence)
-        const tradeAvgs = Object.entries(trades).map(([trade, info]) => {
-            const avgPerDay = info.days / workDays;
-            return { trade, avgQty: Math.round(avgPerDay * info.workers * 10) / 10, presence: avgPerDay, days: info.days };
-        }).filter(t => t.presence >= 0.2)  // only show trades present 20%+ of the time
-          .sort((a, b) => b.avgQty - a.avgQty);
-
-        if (tradeAvgs.length > 0) {
-            crewHtml += `<div class="crew-grid">${tradeAvgs.map(t => {
-                const qty = t.avgQty >= 1 ? Math.round(t.avgQty) : 1;
-                return `<span class="crew-tag"><strong>${qty}</strong> ${t.trade}</span>`;
-            }).join('')}</div>`;
-        }
+    if (trades.length > 0) {
+        crewHtml += `<div class="crew-grid">${trades.map(t => {
+            const qty = t.avg_count >= 1 ? t.avg_count : 1;
+            const label = t.name || t.trade || '?';
+            return `<span class="crew-tag"><strong>${qty}</strong> ${label}</span>`;
+        }).join('')}</div>`;
     }
     if (equipment.length > 0) {
-        // Show equipment present 20%+ of work days, with avg quantity
-        const equipAvgs = equipment
-            .filter(eq => eq.days / workDays >= 0.2)
-            .sort((a, b) => b.days - a.days);
-        // Group duplicate descriptions
-        const equipGroups = {};
-        equipAvgs.forEach(eq => {
-            const name = eq.desc || eq.code;
-            if (!equipGroups[name]) equipGroups[name] = 0;
-            equipGroups[name]++;
-        });
-        if (Object.keys(equipGroups).length > 0) {
-            crewHtml += `<div style="margin-top: 6px;"><div class="form-label">Equipment</div><div class="crew-grid">${
-                Object.entries(equipGroups).map(([name, qty]) =>
-                    `<span class="crew-tag" style="background: rgba(14,165,233,0.06);">${qty > 1 ? `<strong>${qty}</strong> ` : ''}${name}</span>`
-                ).join('')
-            }</div></div>`;
-        }
+        crewHtml += `<div style="margin-top: 6px;"><div class="form-label">Equipment</div><div class="crew-grid">${
+            equipment.map(eq => {
+                const qty = eq.avg_count >= 1 ? eq.avg_count : 1;
+                const label = eq.name || eq.desc || eq.code || '?';
+                return `<span class="crew-tag" style="background: rgba(14,165,233,0.06);">${qty > 1 ? `<strong>${qty}</strong> ` : ''}${label}</span>`;
+            }).join('')
+        }</div></div>`;
     }
     if (!crewHtml) {
         crewHtml = '<span style="color: var(--text-tertiary); font-size: 12px;">No crew data</span>';
@@ -855,8 +869,8 @@ function renderCostCodeDetail(cc, jobId) {
                         <div class="data-item-value">${fmt(cc.bgt_labor_hrs)}</div>
                     </div>
                     <div class="data-item">
-                        <div class="data-item-label">Avg Daily Crew</div>
-                        <div class="data-item-value">${cc.crew_size_avg ? fmt(cc.crew_size_avg, 1) : '—'}</div>
+                        <div class="data-item-label">Typical Daily Crew</div>
+                        <div class="data-item-value">${cb.typical_crew_size ? fmt(cb.typical_crew_size) : (cc.crew_size_avg ? fmt(cc.crew_size_avg, 1) : '—')}</div>
                     </div>
                 </div>
 
@@ -986,6 +1000,8 @@ function renderCostCodeDetail(cc, jobId) {
 
 // ── Save Handlers ──
 async function saveJobContext(jobId) {
+    const hasPerDiem = document.getElementById('has_per_diem')?.checked || false;
+    const perDiemVal = document.getElementById('per_diem_rate')?.value;
     const data = {
         pm_name: document.getElementById('pm_name')?.value || null,
         project_summary: document.getElementById('project_summary')?.value || null,
@@ -994,6 +1010,8 @@ async function saveJobContext(jobId) {
         key_successes: document.getElementById('key_successes')?.value || null,
         lessons_learned: document.getElementById('lessons_learned')?.value || null,
         general_notes: document.getElementById('general_notes')?.value || null,
+        has_per_diem: hasPerDiem,
+        per_diem_rate: hasPerDiem && perDiemVal ? parseFloat(perDiemVal) : null,
     };
 
     // Skip if all fields are empty
@@ -1061,7 +1079,7 @@ function showSaveIndicator(id) {
 async function markComplete(jobId) {
     try {
         await api(`/interview/complete/${jobId}`, { method: 'POST' });
-        navigate('interview');
+        navigate('jobs');
     } catch (err) {
         console.error('Mark complete failed:', err);
     }
@@ -1306,7 +1324,7 @@ function sourceBadge(source) {
 // ── Settings Page ──
 async function renderSettings() {
     document.getElementById('pageTitle').textContent = 'Rate Settings';
-    document.getElementById('pageSubtitle').textContent = 'Labor & equipment rates for cost recalculation';
+    document.getElementById('pageSubtitle').textContent = '';
 
     const content = document.getElementById('content');
     content.innerHTML = '<div class="empty-state"><p>Loading rates...</p></div>';
@@ -1523,7 +1541,7 @@ async function importRates() {
 // ── Chat Page ──
 async function renderChat() {
     document.getElementById('pageTitle').textContent = 'AI Estimating Chat';
-    document.getElementById('pageSubtitle').textContent = 'Ask questions about historical rates & costs';
+    document.getElementById('pageSubtitle').textContent = '';
 
     // Load conversations list and data summary in parallel
     const [convos, summary] = await Promise.all([
@@ -1873,7 +1891,7 @@ let estExpandedBidItems = new Set();
 
 async function loadEstimateList() {
     document.getElementById('pageTitle').textContent = 'HeavyBid Estimates';
-    document.getElementById('pageSubtitle').textContent = 'Browse synced estimate data from HeavyBid';
+    document.getElementById('pageSubtitle').textContent = '';
     const content = document.getElementById('content');
     content.innerHTML = '<div class="empty-state"><p>Loading estimates...</p></div>';
 
@@ -1949,7 +1967,7 @@ function renderEstimateList() {
 
 function renderEstimateCard(est) {
     const linkedBadge = est.linked_job_id
-        ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(37,99,235,0.1);color:var(--wollam-blue);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="event.stopPropagation();navigate('interview',${est.linked_job_id})">HJ ${escHtml(est.hj_job_number || '')} &rarr;</span>`
+        ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(37,99,235,0.1);color:var(--wollam-blue);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="event.stopPropagation();navigate('jobs',${est.linked_job_id})">HJ ${escHtml(est.hj_job_number || '')} &rarr;</span>`
         : `<span style="padding:2px 8px;background:rgba(156,163,175,0.1);color:var(--text-tertiary);border-radius:6px;font-size:11px;">Unlinked</span>`;
 
     return `
@@ -1991,7 +2009,7 @@ function renderEstimateTable(filtered) {
                 <tbody>
                     ${filtered.map(est => {
                         const linkedBadge = est.linked_job_id
-                            ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(37,99,235,0.1);color:var(--wollam-blue);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="event.stopPropagation();navigate('interview',${est.linked_job_id})">HJ ${escHtml(est.hj_job_number || '')} &rarr;</span>`
+                            ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(37,99,235,0.1);color:var(--wollam-blue);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="event.stopPropagation();navigate('jobs',${est.linked_job_id})">HJ ${escHtml(est.hj_job_number || '')} &rarr;</span>`
                             : `<span style="padding:2px 8px;background:rgba(156,163,175,0.1);color:var(--text-tertiary);border-radius:6px;font-size:11px;">—</span>`;
                         return `
                         <tr class="data-row" onclick="navigate('estimates',${est.estimate_id})">
@@ -2055,16 +2073,16 @@ function renderEstimateDetail() {
 
     // Cross-link button
     const crossLink = d.linked_job_id
-        ? `<button onclick="navigate('interview',${d.linked_job_id})" style="padding:8px 20px;background:var(--wollam-blue);color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;">View Actuals &rarr;</button>`
+        ? `<button onclick="navigate('jobs',${d.linked_job_id})" style="padding:8px 20px;background:var(--wollam-blue);color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;">View Actuals &rarr;</button>`
         : '';
 
     content.innerHTML = `
         <div style="margin-bottom:24px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
                 <button onclick="navigate('estimates')" style="padding:6px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-secondary);">&larr; Back to Estimates</button>
-                ${d.linked_job_id ? `<button onclick="navigate('interview',${d.linked_job_id})" style="padding:8px 20px;background:var(--wollam-blue);color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;">View Job ${escHtml(d.hj_job_number || '')} &rarr;</button>` : ''}
+                ${d.linked_job_id ? `<button onclick="navigate('jobs',${d.linked_job_id})" style="padding:8px 20px;background:var(--wollam-blue);color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;">View Job ${escHtml(d.hj_job_number || '')} &rarr;</button>` : ''}
             </div>
-            ${d.linked_job_id ? `<div onclick="navigate('interview',${d.linked_job_id})" style="margin-bottom:12px;padding:8px 14px;background:rgba(37,99,235,0.05);border:1px solid rgba(37,99,235,0.15);border-radius:8px;font-size:13px;color:var(--wollam-blue);cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background='rgba(37,99,235,0.1)'" onmouseout="this.style.background='rgba(37,99,235,0.05)'">Linked to HeavyJob: <strong>${escHtml(d.hj_job_number || '')} — ${escHtml(d.hj_job_name || '')}</strong> (${escHtml(d.hj_job_status || '')}) &rarr;</div>` : ''}
+            ${d.linked_job_id ? `<div onclick="navigate('jobs',${d.linked_job_id})" style="margin-bottom:12px;padding:8px 14px;background:rgba(37,99,235,0.05);border:1px solid rgba(37,99,235,0.15);border-radius:8px;font-size:13px;color:var(--wollam-blue);cursor:pointer;transition:background 0.15s;" onmouseover="this.style.background='rgba(37,99,235,0.1)'" onmouseout="this.style.background='rgba(37,99,235,0.05)'">Linked to HeavyJob: <strong>${escHtml(d.hj_job_number || '')} — ${escHtml(d.hj_job_name || '')}</strong> (${escHtml(d.hj_job_status || '')}) &rarr;</div>` : ''}
         </div>
 
         <!-- KPI Bar -->
@@ -2416,7 +2434,957 @@ async function runSync() {
     }
 }
 
+// ══════════════════════════════════════════════════════════════
+// ── Bidding Platform ──
+// ══════════════════════════════════════════════════════════════
+
+const GROUP_COLORS = [
+    '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6',
+    '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1',
+];
+
+function bidStatusBadge(status) {
+    const map = {
+        active: '<span class="badge badge-active">Active</span>',
+        submitted: '<span class="badge badge-in-progress">Submitted</span>',
+        'no-bid': '<span class="badge badge-not-started">No-Bid</span>',
+        awarded: '<span class="badge badge-complete">Awarded</span>',
+    };
+    return map[status] || `<span class="badge badge-not-started">${escHtml(status || 'Unknown')}</span>`;
+}
+
+function bidDueCountdown(bidDate) {
+    if (!bidDate) return '<span style="color:var(--text-tertiary)">No date</span>';
+    const due = new Date(bidDate + 'T23:59:59');
+    const now = new Date();
+    const diff = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+    if (diff < 0) return '<span style="color:var(--danger-red);font-weight:600;">OVERDUE</span>';
+    if (diff === 0) return '<span style="color:var(--danger-red);font-weight:600;">DUE TODAY</span>';
+    if (diff <= 3) return `<span style="color:var(--status-warning);font-weight:600;">Due in ${diff}d</span>`;
+    return `<span style="color:var(--text-secondary);">Due in ${diff}d</span>`;
+}
+
+function docCategoryBadge(cat) {
+    const colors = {
+        spec: '--status-info', drawing: '--wollam-navy-light', contract: '--status-danger',
+        bid_schedule: '--wollam-gold-dark', rfi_clarification: '--status-warning',
+        addendum_package: '--confidence-moderate', bond_form: '--text-secondary',
+        insurance: '--success-green', general: '--text-tertiary',
+    };
+    const color = colors[cat] || '--text-tertiary';
+    const label = (cat || 'general').replace(/_/g, ' ');
+    return `<span class="badge" style="background:var(${color});color:#fff;font-size:10px;text-transform:uppercase;">${label}</span>`;
+}
+
+// ── Bid Board ──
+
+async function loadBidBoard() {
+    const content = document.getElementById('content');
+    document.getElementById('pageTitle').textContent = 'Bidding';
+    document.getElementById('pageSubtitle').textContent = '';
+    content.innerHTML = '<div class="empty-state"><p>Loading bids...</p></div>';
+
+    try {
+        const bids = await api('/bidding/bids');
+        renderBidBoard(bids);
+    } catch (err) {
+        content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function renderBidBoard(bids) {
+    const content = document.getElementById('content');
+
+    let filtered = bids;
+    if (state.biddingStatusFilter !== 'all') {
+        filtered = filtered.filter(b => b.status === state.biddingStatusFilter);
+    }
+
+    // Sort by due date (soonest first), nulls last
+    filtered.sort((a, b) => {
+        if (!a.bid_date && !b.bid_date) return 0;
+        if (!a.bid_date) return 1;
+        if (!b.bid_date) return -1;
+        return a.bid_date.localeCompare(b.bid_date);
+    });
+
+    const activeCount = bids.filter(b => b.status === 'active').length;
+    const submittedCount = bids.filter(b => b.status === 'submitted').length;
+    const awardedCount = bids.filter(b => b.status === 'awarded').length;
+
+    content.innerHTML = `
+        <!-- KPI Cards -->
+        <div class="kpi-grid">
+            <div class="kpi-card card-animate"><div class="kpi-label">Total Bids</div><div class="kpi-value">${bids.length}</div></div>
+            <div class="kpi-card card-animate"><div class="kpi-label">Active</div><div class="kpi-value">${activeCount}</div></div>
+            <div class="kpi-card card-animate"><div class="kpi-label">Submitted</div><div class="kpi-value">${submittedCount}</div></div>
+            <div class="kpi-card card-animate"><div class="kpi-label">Awarded</div><div class="kpi-value">${awardedCount}</div></div>
+        </div>
+
+        <!-- Toolbar -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+            <div class="filter-tabs">
+                <button class="filter-tab ${state.biddingStatusFilter === 'all' ? 'active' : ''}" onclick="setBidFilter('all')">All (${bids.length})</button>
+                <button class="filter-tab ${state.biddingStatusFilter === 'active' ? 'active' : ''}" onclick="setBidFilter('active')">Active (${activeCount})</button>
+                <button class="filter-tab ${state.biddingStatusFilter === 'submitted' ? 'active' : ''}" onclick="setBidFilter('submitted')">Submitted (${submittedCount})</button>
+                <button class="filter-tab ${state.biddingStatusFilter === 'awarded' ? 'active' : ''}" onclick="setBidFilter('awarded')">Awarded (${awardedCount})</button>
+            </div>
+            <div style="flex:1;"></div>
+            <button class="btn btn-primary" onclick="showNewBidModal()">+ New Bid</button>
+        </div>
+
+        <!-- Bid Table -->
+        ${filtered.length === 0 ? '<div class="empty-state"><p>No bids found. Create your first bid project.</p></div>' : `
+        <div class="card" style="padding:0;overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                <thead>
+                    <tr style="background:var(--bg-hover);border-bottom:2px solid var(--border-default);">
+                        <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);">Bid Name</th>
+                        <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);">Owner</th>
+                        <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);">Location</th>
+                        <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);">Due Date</th>
+                        <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);">Status</th>
+                        <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);">Docs</th>
+                        <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);">SOV Items</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${filtered.map(b => `
+                    <tr style="border-bottom:1px solid var(--border-default);cursor:pointer;" onclick="navigate('bidding', ${b.id})" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background=''">
+                        <td style="padding:10px 12px;font-weight:500;">${escHtml(b.bid_name)}</td>
+                        <td style="padding:10px 12px;color:var(--text-secondary);">${escHtml(b.owner || '—')}</td>
+                        <td style="padding:10px 12px;color:var(--text-secondary);">${escHtml(b.location || '—')}</td>
+                        <td style="padding:10px 12px;">${bidDueCountdown(b.bid_date)}</td>
+                        <td style="padding:10px 12px;text-align:center;">${bidStatusBadge(b.status)}</td>
+                        <td style="padding:10px 12px;text-align:center;color:var(--text-secondary);">${b.doc_count || 0}</td>
+                        <td style="padding:10px 12px;text-align:center;color:var(--text-secondary);">${b.sov_count || 0}</td>
+                    </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>`}
+
+        <!-- New Bid Modal -->
+        <div id="newBidModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;display:none;align-items:center;justify-content:center;">
+            <div class="card" style="width:520px;max-height:80vh;overflow-y:auto;padding:24px;">
+                <h2 style="font-size:18px;font-weight:600;margin:0 0 16px;">New Bid Project</h2>
+                <div id="newBidForm"></div>
+            </div>
+        </div>
+    `;
+}
+
+function setBidFilter(f) {
+    state.biddingStatusFilter = f;
+    loadBidBoard();
+}
+
+function showNewBidModal() {
+    const modal = document.getElementById('newBidModal');
+    modal.style.display = 'flex';
+    state._newBidFiles = [];
+    document.getElementById('newBidForm').innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:12px;">
+            <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Name *</label>
+                <input type="text" id="nb_name" class="search-input" style="width:100%;" placeholder="e.g. Bonanaza Power Plant Piping"></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Owner / GC</label>
+                    <input type="text" id="nb_owner" class="search-input" style="width:100%;" placeholder="Who issued the RFP?"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Due Date</label>
+                    <input type="date" id="nb_date" class="search-input" style="width:100%;"></div>
+            </div>
+
+            <!-- File Drop Zone -->
+            <div>
+                <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">RFP Documents</label>
+                <div id="nbDropZone" style="border:2px dashed var(--border-strong);border-radius:8px;padding:24px;text-align:center;cursor:pointer;background:var(--bg-hover);transition:border-color 0.15s;"
+                     onclick="document.getElementById('nbFileInput').click()"
+                     ondragover="event.preventDefault();this.style.borderColor='var(--wollam-navy)';"
+                     ondragleave="this.style.borderColor='var(--border-strong)';"
+                     ondrop="handleNewBidDrop(event)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <p style="margin:0;font-size:13px;color:var(--text-secondary);">Drag & drop RFP files here, or click to browse</p>
+                    <p style="margin:4px 0 0;font-size:11px;color:var(--text-tertiary);">PDF, Excel, Word, CSV, TXT</p>
+                </div>
+                <input type="file" id="nbFileInput" style="display:none;" multiple accept=".pdf,.xlsx,.xls,.csv,.txt,.docx,.doc" onchange="handleNewBidFiles(this.files)">
+                <div id="nbFileList" style="margin-top:8px;"></div>
+            </div>
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
+                <button class="btn btn-sm" onclick="closeNewBidModal()">Cancel</button>
+                <button class="btn btn-primary btn-sm" id="nbCreateBtn" onclick="createBid()">Create Bid</button>
+            </div>
+        </div>
+    `;
+}
+
+function handleNewBidDrop(event) {
+    event.preventDefault();
+    document.getElementById('nbDropZone').style.borderColor = 'var(--border-strong)';
+    handleNewBidFiles(event.dataTransfer.files);
+}
+
+function handleNewBidFiles(fileList) {
+    for (const f of fileList) {
+        state._newBidFiles.push(f);
+    }
+    renderNewBidFileList();
+}
+
+function removeNewBidFile(idx) {
+    state._newBidFiles.splice(idx, 1);
+    renderNewBidFileList();
+}
+
+function renderNewBidFileList() {
+    const el = document.getElementById('nbFileList');
+    if (!state._newBidFiles.length) { el.innerHTML = ''; return; }
+    el.innerHTML = state._newBidFiles.map((f, i) => `
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span style="flex:1;color:var(--text-primary);">${escHtml(f.name)}</span>
+            <span style="color:var(--text-tertiary);">${(f.size / 1024).toFixed(0)} KB</span>
+            <button onclick="removeNewBidFile(${i})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);font-size:11px;padding:0 2px;">x</button>
+        </div>
+    `).join('');
+}
+
+function closeNewBidModal() {
+    document.getElementById('newBidModal').style.display = 'none';
+    state._newBidFiles = [];
+}
+
+async function createBid() {
+    const name = document.getElementById('nb_name').value.trim();
+    if (!name) { alert('Bid name is required'); return; }
+
+    const btn = document.getElementById('nbCreateBtn');
+    const fileCount = state._newBidFiles.length;
+    btn.textContent = fileCount ? 'Creating & uploading...' : 'Creating...';
+    btn.disabled = true;
+
+    try {
+        const bid = await api('/bidding/bids', {
+            method: 'POST',
+            body: JSON.stringify({
+                bid_name: name,
+                owner: document.getElementById('nb_owner').value.trim() || null,
+                bid_date: document.getElementById('nb_date').value || null,
+            }),
+        });
+
+        // Upload files if any
+        if (fileCount) {
+            for (let i = 0; i < state._newBidFiles.length; i++) {
+                btn.textContent = `Uploading ${i + 1} of ${fileCount}...`;
+                const formData = new FormData();
+                formData.append('file', state._newBidFiles[i]);
+                formData.append('addendum_number', '0');
+                formData.append('doc_category', 'general');
+                formData.append('date_received', new Date().toISOString().split('T')[0]);
+                await fetch(`/api/bidding/bids/${bid.id}/documents`, {
+                    method: 'POST',
+                    body: formData,
+                });
+            }
+        }
+
+        closeNewBidModal();
+        navigate('bidding', bid.id);
+    } catch (err) {
+        btn.textContent = 'Create Bid';
+        btn.disabled = false;
+        alert('Error creating bid: ' + err.message);
+    }
+}
+
+// ── Bid Detail ──
+
+async function loadBidDetail(bidId) {
+    const content = document.getElementById('content');
+    document.getElementById('pageTitle').textContent = 'Bid Detail';
+    document.getElementById('pageSubtitle').textContent = 'Loading...';
+    content.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+
+    try {
+        const bid = await api(`/bidding/bids/${bidId}`);
+        document.getElementById('pageTitle').textContent = bid.bid_name;
+        document.getElementById('pageSubtitle').textContent = [bid.owner, bid.location].filter(Boolean).join(' — ') || 'Bid Project';
+        renderBidDetail(bid);
+    } catch (err) {
+        content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+async function renderBidDetail(bid) {
+    const content = document.getElementById('content');
+    const tab = state.biddingTab;
+
+    content.innerHTML = `
+        <div style="margin-bottom:16px;">
+            <button class="btn btn-sm" onclick="navigate('bidding')" style="margin-bottom:12px;">
+                &larr; Back to Bid Board
+            </button>
+        </div>
+
+        <!-- Summary bar -->
+        <div class="kpi-grid" style="margin-bottom:16px;">
+            <div class="kpi-card card-animate"><div class="kpi-label">Status</div><div class="kpi-value" style="font-size:16px;">${bidStatusBadge(bid.status)}</div></div>
+            <div class="kpi-card card-animate"><div class="kpi-label">Due Date</div><div class="kpi-value" style="font-size:16px;">${bidDueCountdown(bid.bid_date)}</div></div>
+            <div class="kpi-card card-animate"><div class="kpi-label">Documents</div><div class="kpi-value">${bid.doc_count || 0}</div></div>
+            <div class="kpi-card card-animate"><div class="kpi-label">SOV Items</div><div class="kpi-value">${bid.sov_count || 0}</div></div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="filter-tabs" style="margin-bottom:16px;">
+            <button class="filter-tab ${tab === 'overview' ? 'active' : ''}" onclick="switchBidTab('overview', ${bid.id})">Overview</button>
+            <button class="filter-tab ${tab === 'sov' ? 'active' : ''}" onclick="switchBidTab('sov', ${bid.id})">Schedule of Values</button>
+            <button class="filter-tab ${tab === 'documents' ? 'active' : ''}" onclick="switchBidTab('documents', ${bid.id})">Documents</button>
+        </div>
+
+        <div id="bidTabContent"></div>
+    `;
+
+    if (tab === 'overview') renderBidOverview(bid);
+    else if (tab === 'sov') renderBidSOV(bid.id);
+    else if (tab === 'documents') renderBidDocuments(bid.id);
+}
+
+function switchBidTab(tab, bidId) {
+    state.biddingTab = tab;
+    loadBidDetail(bidId);
+}
+
+// ── Overview Tab ──
+
+function renderBidOverview(bid) {
+    const tc = document.getElementById('bidTabContent');
+    tc.innerHTML = `
+        <div class="card" style="padding:20px;">
+            <h3 style="font-size:15px;font-weight:600;margin:0 0 16px;">Bid Information</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Name</label>
+                    <input type="text" id="be_name" class="search-input" style="width:100%;" value="${escAttr(bid.bid_name || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Number</label>
+                    <input type="text" id="be_number" class="search-input" style="width:100%;" value="${escAttr(bid.bid_number || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Owner</label>
+                    <input type="text" id="be_owner" class="search-input" style="width:100%;" value="${escAttr(bid.owner || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">General Contractor</label>
+                    <input type="text" id="be_gc" class="search-input" style="width:100%;" value="${escAttr(bid.general_contractor || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Due Date</label>
+                    <input type="date" id="be_date" class="search-input" style="width:100%;" value="${escAttr(bid.bid_date || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Due Time</label>
+                    <input type="time" id="be_time" class="search-input" style="width:100%;" value="${escAttr(bid.bid_due_time || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Location</label>
+                    <input type="text" id="be_location" class="search-input" style="width:100%;" value="${escAttr(bid.location || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Project Type</label>
+                    <input type="text" id="be_type" class="search-input" style="width:100%;" value="${escAttr(bid.project_type || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Contact Name</label>
+                    <input type="text" id="be_contact" class="search-input" style="width:100%;" value="${escAttr(bid.contact_name || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Contact Email</label>
+                    <input type="email" id="be_email" class="search-input" style="width:100%;" value="${escAttr(bid.contact_email || '')}"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Status</label>
+                    <select id="be_status" class="search-input" style="width:100%;">
+                        <option value="active" ${bid.status === 'active' ? 'selected' : ''}>Active</option>
+                        <option value="submitted" ${bid.status === 'submitted' ? 'selected' : ''}>Submitted</option>
+                        <option value="no-bid" ${bid.status === 'no-bid' ? 'selected' : ''}>No-Bid</option>
+                        <option value="awarded" ${bid.status === 'awarded' ? 'selected' : ''}>Awarded</option>
+                    </select></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Estimated Value</label>
+                    <input type="number" id="be_value" class="search-input" style="width:100%;" value="${bid.estimated_value || ''}"></div>
+            </div>
+            <div style="margin-top:12px;">
+                <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Description</label>
+                <textarea id="be_desc" class="search-input" rows="3" style="width:100%;resize:vertical;">${escHtml(bid.description || '')}</textarea>
+            </div>
+            <div style="margin-top:12px;">
+                <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Notes</label>
+                <textarea id="be_notes" class="search-input" rows="2" style="width:100%;resize:vertical;">${escHtml(bid.notes || '')}</textarea>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                <button class="btn btn-sm" style="color:var(--danger-red);" onclick="deleteBid(${bid.id})">Delete Bid</button>
+                <button class="btn btn-primary btn-sm" onclick="saveBidOverview(${bid.id})">Save Changes</button>
+            </div>
+        </div>
+    `;
+}
+
+function escAttr(s) {
+    return String(s).replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+async function saveBidOverview(bidId) {
+    try {
+        await api(`/bidding/bids/${bidId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                bid_name: document.getElementById('be_name').value.trim(),
+                bid_number: document.getElementById('be_number').value.trim() || null,
+                owner: document.getElementById('be_owner').value.trim() || null,
+                general_contractor: document.getElementById('be_gc').value.trim() || null,
+                bid_date: document.getElementById('be_date').value || null,
+                bid_due_time: document.getElementById('be_time').value || null,
+                location: document.getElementById('be_location').value.trim() || null,
+                project_type: document.getElementById('be_type').value.trim() || null,
+                contact_name: document.getElementById('be_contact').value.trim() || null,
+                contact_email: document.getElementById('be_email').value.trim() || null,
+                status: document.getElementById('be_status').value,
+                estimated_value: parseFloat(document.getElementById('be_value').value) || null,
+                description: document.getElementById('be_desc').value.trim() || null,
+                notes: document.getElementById('be_notes').value.trim() || null,
+            }),
+        });
+        loadBidDetail(bidId);
+    } catch (err) {
+        alert('Error saving: ' + err.message);
+    }
+}
+
+async function deleteBid(bidId) {
+    if (!confirm('Delete this bid and all its documents and SOV items?')) return;
+    try {
+        await api(`/bidding/bids/${bidId}`, { method: 'DELETE' });
+        navigate('bidding');
+    } catch (err) {
+        alert('Error deleting: ' + err.message);
+    }
+}
+
+// ── SOV Tab ──
+
+async function renderBidSOV(bidId) {
+    const tc = document.getElementById('bidTabContent');
+    tc.innerHTML = '<div class="empty-state"><p>Loading schedule...</p></div>';
+
+    try {
+        const [items, groups] = await Promise.all([
+            api(`/bidding/bids/${bidId}/sov`),
+            api(`/bidding/bids/${bidId}/groups`),
+        ]);
+
+        // Build group color map
+        const groupColors = {};
+        groups.forEach((g, i) => { groupColors[g.id] = GROUP_COLORS[i % GROUP_COLORS.length]; });
+
+        tc.innerHTML = `
+            <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+                <button class="btn btn-primary btn-sm" onclick="showSOVUpload(${bidId})">Upload Schedule</button>
+                <button class="btn btn-sm" onclick="showAddSOVItem(${bidId})">+ Add Item</button>
+                <div style="flex:1;"></div>
+                <button class="btn btn-sm" onclick="showGroupManager(${bidId})">Pricing Groups (${groups.length})</button>
+            </div>
+
+            ${state.biddingSovPreview ? renderSOVPreview(bidId) : ''}
+
+            <div id="sovAddForm" style="display:none;"></div>
+            <div id="groupManager" style="display:none;"></div>
+
+            ${items.length === 0 ? '<div class="empty-state"><p>No schedule items yet. Upload a bid schedule or add items manually.</p></div>' : `
+            <div class="card" style="padding:0;overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead>
+                        <tr style="background:var(--bg-hover);border-bottom:2px solid var(--border-default);">
+                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:60px;">#</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);">Description</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:70px;">Unit</th>
+                            <th style="padding:10px 12px;text-align:right;font-weight:600;color:var(--text-secondary);width:90px;">Qty</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:140px;">Group</th>
+                            <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);width:80px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${items.map(item => {
+                            const gc = item.pricing_group_id ? groupColors[item.pricing_group_id] : null;
+                            return `
+                            <tr style="${gc ? `border-left:3px solid ${gc};` : ''}border-bottom:1px solid var(--border-default);" id="sov-row-${item.id}">
+                                <td style="padding:8px 12px;color:var(--text-secondary);font-family:monospace;">${escHtml(item.item_number || '—')}</td>
+                                <td style="padding:8px 12px;">${escHtml(item.description)}</td>
+                                <td style="padding:8px 12px;color:var(--text-secondary);">${escHtml(item.unit || '—')}</td>
+                                <td style="padding:8px 12px;text-align:right;">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
+                                <td style="padding:8px 12px;">
+                                    ${item.group_name ? `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${gc};display:inline-block;"></span>${escHtml(item.group_name)}</span>` : '<span style="color:var(--text-tertiary);">—</span>'}
+                                </td>
+                                <td style="padding:8px 12px;text-align:center;">
+                                    <button onclick="editSOVItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);padding:2px;" title="Edit">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                    <button onclick="deleteSOVItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);padding:2px;" title="Delete">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                    </button>
+                                </td>
+                            </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>`}
+        `;
+    } catch (err) {
+        tc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function showSOVUpload(bidId) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,.xls,.pdf,.csv,.txt,.docx';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const tc = document.getElementById('bidTabContent');
+        tc.innerHTML = `<div class="empty-state"><p>Parsing schedule with AI... This may take a moment.</p></div>`;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const res = await fetch(`/api/bidding/bids/${bidId}/sov/upload`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                throw new Error(err.detail || 'Upload failed');
+            }
+            const data = await res.json();
+            state.biddingSovPreview = data;
+            renderBidSOV(bidId);
+        } catch (err) {
+            alert('Error parsing schedule: ' + err.message);
+            renderBidSOV(bidId);
+        }
+    };
+    input.click();
+}
+
+function renderSOVPreview(bidId) {
+    const preview = state.biddingSovPreview;
+    if (!preview) return '';
+
+    return `
+        <div class="card" style="padding:16px;margin-bottom:16px;border:2px solid var(--wollam-gold);background:var(--wollam-gold-faint);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <h3 style="font-size:14px;font-weight:600;margin:0;">AI-Parsed Preview: ${preview.count} items from ${escHtml(preview.filename)}</h3>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn btn-sm" onclick="cancelSOVPreview(${bidId})">Cancel</button>
+                    <button class="btn btn-primary btn-sm" onclick="confirmSOVPreview(${bidId})">Confirm & Save</button>
+                </div>
+            </div>
+            <div style="max-height:300px;overflow-y:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead><tr style="background:rgba(0,0,0,0.04);">
+                        <th style="padding:6px 8px;text-align:left;">#</th>
+                        <th style="padding:6px 8px;text-align:left;">Description</th>
+                        <th style="padding:6px 8px;text-align:left;">Unit</th>
+                        <th style="padding:6px 8px;text-align:right;">Qty</th>
+                    </tr></thead>
+                    <tbody>
+                        ${preview.items.map(item => `
+                            <tr style="border-bottom:1px solid var(--border-default);">
+                                <td style="padding:4px 8px;font-family:monospace;">${escHtml(item.item_number || '—')}</td>
+                                <td style="padding:4px 8px;">${escHtml(item.description || '')}</td>
+                                <td style="padding:4px 8px;">${escHtml(item.unit || '—')}</td>
+                                <td style="padding:4px 8px;text-align:right;">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+async function confirmSOVPreview(bidId) {
+    const preview = state.biddingSovPreview;
+    if (!preview) return;
+
+    try {
+        await api(`/bidding/bids/${bidId}/sov/confirm`, {
+            method: 'POST',
+            body: JSON.stringify({ items: preview.items }),
+        });
+        state.biddingSovPreview = null;
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error saving items: ' + err.message);
+    }
+}
+
+function cancelSOVPreview(bidId) {
+    state.biddingSovPreview = null;
+    renderBidSOV(bidId);
+}
+
+function showAddSOVItem(bidId) {
+    const form = document.getElementById('sovAddForm');
+    form.style.display = 'block';
+    form.innerHTML = `
+        <div class="card" style="padding:16px;margin-bottom:16px;">
+            <h4 style="font-size:13px;font-weight:600;margin:0 0 12px;">Add SOV Item</h4>
+            <div style="display:grid;grid-template-columns:80px 1fr 80px 100px;gap:8px;align-items:end;">
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Item #</label>
+                    <input type="text" id="sov_num" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Description *</label>
+                    <input type="text" id="sov_desc" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Unit</label>
+                    <input type="text" id="sov_unit" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Qty</label>
+                    <input type="number" id="sov_qty" class="search-input" style="width:100%;"></div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+                <button class="btn btn-sm" onclick="document.getElementById('sovAddForm').style.display='none'">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="addSOVItem(${bidId})">Add</button>
+            </div>
+        </div>
+    `;
+}
+
+async function addSOVItem(bidId) {
+    const desc = document.getElementById('sov_desc').value.trim();
+    if (!desc) { alert('Description is required'); return; }
+
+    try {
+        await api(`/bidding/bids/${bidId}/sov`, {
+            method: 'POST',
+            body: JSON.stringify({
+                item_number: document.getElementById('sov_num').value.trim() || null,
+                description: desc,
+                unit: document.getElementById('sov_unit').value.trim() || null,
+                quantity: parseFloat(document.getElementById('sov_qty').value) || null,
+            }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function editSOVItem(itemId, bidId) {
+    // Inline edit: replace row content
+    const row = document.getElementById(`sov-row-${itemId}`);
+    if (!row) return;
+
+    // Fetch current data
+    try {
+        const items = await api(`/bidding/bids/${bidId}/sov`);
+        const item = items.find(i => i.id === itemId);
+        if (!item) return;
+
+        const groups = await api(`/bidding/bids/${bidId}/groups`);
+
+        row.innerHTML = `
+            <td style="padding:4px 6px;"><input type="text" id="edit_num_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${escAttr(item.item_number || '')}"></td>
+            <td style="padding:4px 6px;"><input type="text" id="edit_desc_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${escAttr(item.description || '')}"></td>
+            <td style="padding:4px 6px;"><input type="text" id="edit_unit_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${escAttr(item.unit || '')}"></td>
+            <td style="padding:4px 6px;"><input type="number" id="edit_qty_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${item.quantity || ''}"></td>
+            <td style="padding:4px 6px;">
+                <select id="edit_grp_${itemId}" class="search-input" style="width:100%;font-size:12px;">
+                    <option value="">None</option>
+                    ${groups.map(g => `<option value="${g.id}" ${item.pricing_group_id === g.id ? 'selected' : ''}>${escHtml(g.name)}</option>`).join('')}
+                </select>
+            </td>
+            <td style="padding:4px 6px;text-align:center;">
+                <button onclick="saveSOVEdit(${itemId}, ${bidId})" class="btn btn-primary btn-sm" style="font-size:11px;padding:2px 8px;">Save</button>
+            </td>
+        `;
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function saveSOVEdit(itemId, bidId) {
+    try {
+        const grpVal = document.getElementById(`edit_grp_${itemId}`).value;
+        await api(`/bidding/sov/${itemId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                item_number: document.getElementById(`edit_num_${itemId}`).value.trim() || null,
+                description: document.getElementById(`edit_desc_${itemId}`).value.trim(),
+                unit: document.getElementById(`edit_unit_${itemId}`).value.trim() || null,
+                quantity: parseFloat(document.getElementById(`edit_qty_${itemId}`).value) || null,
+                pricing_group_id: grpVal ? parseInt(grpVal) : null,
+            }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function deleteSOVItem(itemId, bidId) {
+    if (!confirm('Delete this SOV item?')) return;
+    try {
+        await api(`/bidding/sov/${itemId}`, { method: 'DELETE' });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+// ── Pricing Group Manager ──
+
+async function showGroupManager(bidId) {
+    const mgr = document.getElementById('groupManager');
+    if (mgr.style.display === 'block') { mgr.style.display = 'none'; return; }
+    mgr.style.display = 'block';
+
+    try {
+        const groups = await api(`/bidding/bids/${bidId}/groups`);
+        mgr.innerHTML = `
+            <div class="card" style="padding:16px;margin-bottom:16px;">
+                <h4 style="font-size:13px;font-weight:600;margin:0 0 12px;">Pricing Groups</h4>
+                ${groups.map((g, i) => `
+                    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-default);">
+                        <span style="width:10px;height:10px;border-radius:50%;background:${GROUP_COLORS[i % GROUP_COLORS.length]};flex-shrink:0;"></span>
+                        <span style="flex:1;font-size:13px;">${escHtml(g.name)}</span>
+                        <span style="font-size:11px;color:var(--text-tertiary);">${g.item_count} items</span>
+                        <button onclick="deleteGroup(${g.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);font-size:11px;">Delete</button>
+                    </div>
+                `).join('')}
+                <div style="display:flex;gap:8px;margin-top:12px;">
+                    <input type="text" id="new_group_name" class="search-input" placeholder="New group name..." style="flex:1;">
+                    <button class="btn btn-primary btn-sm" onclick="createGroup(${bidId})">Add</button>
+                </div>
+            </div>
+        `;
+    } catch (err) {
+        mgr.innerHTML = `<p>Error loading groups: ${escHtml(err.message)}</p>`;
+    }
+}
+
+async function createGroup(bidId) {
+    const name = document.getElementById('new_group_name').value.trim();
+    if (!name) return;
+    try {
+        await api(`/bidding/bids/${bidId}/groups`, {
+            method: 'POST',
+            body: JSON.stringify({ name }),
+        });
+        showGroupManager(bidId);
+        // Force refresh to update dropdown
+        document.getElementById('groupManager').style.display = 'none';
+        showGroupManager(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function deleteGroup(groupId, bidId) {
+    if (!confirm('Delete this pricing group? Items will be ungrouped.')) return;
+    try {
+        await api(`/bidding/groups/${groupId}`, { method: 'DELETE' });
+        showGroupManager(bidId);
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+// ── Documents Tab ──
+
+async function renderBidDocuments(bidId) {
+    const tc = document.getElementById('bidTabContent');
+    tc.innerHTML = '<div class="empty-state"><p>Loading documents...</p></div>';
+
+    try {
+        const docs = await api(`/bidding/bids/${bidId}/documents`);
+
+        // Group by addendum
+        const addendums = {};
+        docs.forEach(d => {
+            const key = d.addendum_number || 0;
+            if (!addendums[key]) addendums[key] = [];
+            addendums[key].push(d);
+        });
+        const sortedKeys = Object.keys(addendums).sort((a, b) => Number(a) - Number(b));
+
+        tc.innerHTML = `
+            <!-- Upload Zone -->
+            <div class="card" style="padding:20px;margin-bottom:16px;border:2px dashed var(--border-strong);text-align:center;cursor:pointer;background:var(--bg-hover);"
+                 onclick="triggerDocUpload(${bidId})"
+                 ondragover="event.preventDefault();this.style.borderColor='var(--wollam-navy)';"
+                 ondragleave="this.style.borderColor='var(--border-strong)';"
+                 ondrop="handleDocDrop(event, ${bidId});this.style.borderColor='var(--border-strong)';">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <p style="margin:0;font-size:13px;color:var(--text-secondary);">Drag files here or click to upload</p>
+                <p style="margin:4px 0 0;font-size:11px;color:var(--text-tertiary);">PDF, Excel, Word, CSV, TXT</p>
+            </div>
+
+            <input type="file" id="docFileInput" style="display:none;" multiple accept=".pdf,.xlsx,.xls,.csv,.txt,.docx,.doc" onchange="uploadDocFiles(this.files, ${bidId})">
+
+            <!-- Upload metadata form (shown during upload) -->
+            <div id="docUploadMeta" style="display:none;"></div>
+
+            <!-- Document list by addendum -->
+            ${docs.length === 0 ? '<div class="empty-state"><p>No documents uploaded yet.</p></div>' : ''}
+            ${sortedKeys.map(key => `
+                <div style="margin-bottom:16px;">
+                    <h4 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin:0 0 8px;">
+                        ${key === '0' ? 'Original Package' : `Addendum ${key}`}
+                        <span style="font-weight:400;color:var(--text-tertiary);"> (${addendums[key].length} docs)</span>
+                    </h4>
+                    ${addendums[key].map(doc => `
+                        <div class="card" style="padding:12px;margin-bottom:6px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                <span style="flex:1;font-size:13px;font-weight:500;">${escHtml(doc.filename)}</span>
+                                ${docCategoryBadge(doc.doc_category)}
+                                ${doc.date_received ? `<span style="font-size:11px;color:var(--text-tertiary);">Received: ${doc.date_received}</span>` : ''}
+                                <span style="font-size:11px;color:var(--text-tertiary);">${doc.word_count ? fmt(doc.word_count) + ' words' : ''}</span>
+                                <button onclick="toggleDocDetail(${doc.id})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);padding:2px;" title="Details">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                                </button>
+                                <button onclick="deleteDoc(${doc.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);padding:2px;" title="Delete">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                </button>
+                            </div>
+                            <div id="doc-detail-${doc.id}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-default);"></div>
+                        </div>
+                    `).join('')}
+                </div>
+            `).join('')}
+        `;
+    } catch (err) {
+        tc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function triggerDocUpload(bidId) {
+    // Show metadata form first
+    const meta = document.getElementById('docUploadMeta');
+    meta.style.display = 'block';
+    meta.innerHTML = `
+        <div class="card" style="padding:16px;margin-bottom:16px;">
+            <h4 style="font-size:13px;font-weight:600;margin:0 0 12px;">Upload Details</h4>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;">
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Addendum #</label>
+                    <input type="number" id="upload_addendum" class="search-input" value="0" min="0" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Category</label>
+                    <select id="upload_category" class="search-input" style="width:100%;">
+                        <option value="general">General</option>
+                        <option value="spec">Spec</option>
+                        <option value="drawing">Drawing</option>
+                        <option value="contract">Contract</option>
+                        <option value="bid_schedule">Bid Schedule</option>
+                        <option value="rfi_clarification">RFI / Clarification</option>
+                        <option value="addendum_package">Addendum Package</option>
+                        <option value="bond_form">Bond Form</option>
+                        <option value="insurance">Insurance</option>
+                    </select></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Date Received</label>
+                    <input type="date" id="upload_date" class="search-input" style="width:100%;" value="${new Date().toISOString().split('T')[0]}"></div>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-primary btn-sm" onclick="document.getElementById('docFileInput').click()">Choose Files</button>
+                <button class="btn btn-sm" onclick="document.getElementById('docUploadMeta').style.display='none'">Cancel</button>
+            </div>
+        </div>
+    `;
+}
+
+async function handleDocDrop(event, bidId) {
+    event.preventDefault();
+    const files = event.dataTransfer.files;
+    if (files.length === 0) return;
+    await uploadDocFiles(files, bidId);
+}
+
+async function uploadDocFiles(files, bidId) {
+    const addendum = document.getElementById('upload_addendum')?.value || '0';
+    const category = document.getElementById('upload_category')?.value || 'general';
+    const dateReceived = document.getElementById('upload_date')?.value || null;
+
+    for (const file of files) {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('addendum_number', addendum);
+        formData.append('doc_category', category);
+        if (dateReceived) formData.append('date_received', dateReceived);
+
+        try {
+            await fetch(`/api/bidding/bids/${bidId}/documents`, {
+                method: 'POST',
+                body: formData,
+            });
+        } catch (err) {
+            alert(`Error uploading ${file.name}: ${err.message}`);
+        }
+    }
+
+    document.getElementById('docUploadMeta').style.display = 'none';
+    renderBidDocuments(bidId);
+}
+
+async function toggleDocDetail(docId) {
+    const detail = document.getElementById(`doc-detail-${docId}`);
+    if (!detail) return;
+
+    if (detail.style.display === 'block') {
+        detail.style.display = 'none';
+        return;
+    }
+
+    detail.style.display = 'block';
+    detail.innerHTML = '<p style="font-size:12px;color:var(--text-tertiary);">Loading...</p>';
+
+    try {
+        const doc = await api(`/bidding/documents/${docId}`);
+        const textPreview = doc.extracted_text
+            ? doc.extracted_text.substring(0, 1000) + (doc.extracted_text.length > 1000 ? '...' : '')
+            : 'No text extracted';
+
+        detail.innerHTML = `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                <div><label style="font-size:11px;color:var(--text-secondary);">Category</label>
+                    <select id="doc_cat_${docId}" class="search-input" style="width:100%;font-size:12px;">
+                        ${['general','spec','drawing','contract','bid_schedule','rfi_clarification','addendum_package','bond_form','insurance'].map(c =>
+                            `<option value="${c}" ${doc.doc_category === c ? 'selected' : ''}>${c.replace(/_/g, ' ')}</option>`
+                        ).join('')}
+                    </select></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);">Addendum #</label>
+                    <input type="number" id="doc_add_${docId}" class="search-input" value="${doc.addendum_number || 0}" style="width:100%;font-size:12px;"></div>
+            </div>
+            <div style="margin-bottom:8px;">
+                <label style="font-size:11px;color:var(--text-secondary);">Notes</label>
+                <textarea id="doc_notes_${docId}" class="search-input" rows="2" style="width:100%;font-size:12px;resize:vertical;">${escHtml(doc.notes || '')}</textarea>
+            </div>
+            <button class="btn btn-primary btn-sm" style="font-size:11px;margin-bottom:8px;" onclick="saveDocMeta(${docId})">Save Metadata</button>
+            <div style="margin-top:4px;">
+                <label style="font-size:11px;font-weight:500;color:var(--text-secondary);">Extracted Text Preview</label>
+                <pre style="font-size:11px;background:var(--bg-hover);padding:8px;border-radius:6px;max-height:200px;overflow-y:auto;white-space:pre-wrap;margin-top:4px;">${escHtml(textPreview)}</pre>
+            </div>
+        `;
+    } catch (err) {
+        detail.innerHTML = `<p style="color:var(--danger-red);font-size:12px;">${escHtml(err.message)}</p>`;
+    }
+}
+
+async function saveDocMeta(docId) {
+    try {
+        await api(`/bidding/documents/${docId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                doc_category: document.getElementById(`doc_cat_${docId}`).value,
+                addendum_number: parseInt(document.getElementById(`doc_add_${docId}`).value) || 0,
+                notes: document.getElementById(`doc_notes_${docId}`).value.trim() || null,
+            }),
+        });
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function deleteDoc(docId, bidId) {
+    if (!confirm('Delete this document?')) return;
+    try {
+        await api(`/bidding/documents/${docId}`, { method: 'DELETE' });
+        renderBidDocuments(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
-    navigate('interview');
+    navigate('jobs');
 });

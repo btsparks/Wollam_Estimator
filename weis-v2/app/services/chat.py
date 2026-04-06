@@ -1,8 +1,8 @@
-"""AI Estimating Chat Service — Context assembly + Claude API.
+"""AI Estimating Chat Service — SQL tool + Claude API.
 
-The core engine for WEIS estimating chat. Parses estimator questions,
-searches historical rate data, assembles structured context blocks,
-and calls Claude to produce data-backed answers with source citations.
+The core engine for WEIS estimating chat. Claude queries the database
+directly via a run_sql tool, then assembles data-backed answers with
+source citations.
 
 All database queries live here; the API layer is a thin wrapper.
 """
@@ -19,10 +19,16 @@ import anthropic
 from app.config import ANTHROPIC_API_KEY
 from app.database import get_connection
 from app.services.cost_report_import import get_data_quality
+from app.services.sql_tool import (
+    SCHEMA_DESCRIPTION,
+    TOOL_DEFINITION,
+    execute_sql,
+)
 
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
+MAX_TOOL_CALLS = 5  # Cap tool-use iterations per message
 
 # ─────────────────────────────────────────────────────────────
 # Signal Dictionaries — keyword detection for intent parsing
@@ -1018,33 +1024,44 @@ def build_context_block(rate_items: list[dict], signals: dict,
 # System Prompt
 # ─────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are WEIS — Wollam Construction's estimating intelligence tool. You search historical field data across 197 jobs and HeavyBid estimates, and help estimators understand what the data shows.
+SYSTEM_PROMPT = """You are WEIS — Wollam Construction's estimating intelligence tool. You have direct SQL access to a database of 197 HeavyJob projects, 15,019 cost codes, 324K timecards, HeavyBid estimates, PM context, and 62K Dropbox documents.
 
-You can answer questions about:
-- Specific jobs by number (e.g., "8540") or name (e.g., "capping projects")
+Use the run_sql tool to look up data BEFORE answering. Do not guess or rely on memory.
+
+WHAT YOU CAN ANSWER:
+- Specific jobs by number (e.g., "8540") or name keywords
 - Production rates, crew sizes, and costs by discipline or activity
 - Project context: what happened on a job, site conditions, challenges
 - Comparisons across jobs, disciplines, or cost codes
 - Patterns and trends in historical data
-- Estimates: what was bid, bid item breakdowns, estimated production rates, crew plans
+- Estimates: what was bid, bid item breakdowns, estimated production rates
 - Bid vs Actual comparisons when a job has both an estimate and field actuals
+- Document and diary intelligence
 
-DATA SOURCES (in order of reliability):
-- Rate card items: Calculated from field timecards. Include MH/unit, $/unit, crew breakdowns. Most reliable.
-- Raw cost code actuals: From HeavyJob cost codes. Hours and quantities only, no detailed rates. Use when rate cards unavailable.
-- HeavyBid estimates: What was bid before construction. Useful for bid-vs-actual comparisons. Not field data.
+QUERY GUIDELINES:
+- For rates: JOIN rate_item ri → rate_card rc ON ri.card_id = rc.card_id → job j ON rc.job_id = j.job_id
+- For raw actuals: Query hj_costcode cc JOIN job j ON cc.job_id = j.job_id
+- For PM context: pm_context (job level), cc_context (cost code level) — join via job_id
+- For estimates: hb_estimate → hb_biditem → hb_activity → hb_resource (join via estimate_id)
+- For bid vs actual: Link hb_estimate.linked_job_id to job.job_id
+- For crew details: Query hj_timecard grouped by pay_class_code (ALWAYS filter by job_id + cost_code)
+- For documents: dropbox_document JOIN dropbox_extract via doc_id
+- Always include job_number and job name in results so you can cite sources
+- Use LIMIT to keep results manageable
+- ⚠️ hj_timecard (324K rows) and hj_equipment_entry (221K rows) are large — ALWAYS filter by job_id
+- rate_item.activity column holds the cost code string (same as hj_costcode.code)
 
 WHAT YOU CAN DO:
 - Compare rates, crews, and production across jobs or disciplines
 - Summarize and organize data into useful groupings
-- Highlight notable differences, outliers, or patterns in the data
-- Explain what the numbers show (e.g., "Job 8540 ran 2x the crew size of 8553 on this code")
-- Compare bid estimates to actual field performance (estimate = what was bid, actuals = what really happened)
-- Use tables, bullet points, or narrative — whatever format best answers the question
-- If the estimator explicitly asks "what should I use?" or "what do you recommend?", highlight the highest-confidence data point and explain why it has the most support. Still do not add contingencies or risk factors.
+- Highlight notable differences, outliers, or patterns
+- Explain what the numbers show
+- Compare bid estimates to actual field performance
+- Use tables, bullet points, or narrative — whatever best answers the question
+- If explicitly asked "what should I use?", highlight the highest-confidence data point and explain why
 
 HARD RULES — NEVER BREAK THESE:
-- ONLY use numbers from the provided data blocks. No extrapolation. No inventing numbers.
+- ONLY use numbers from your SQL query results. No extrapolation. No inventing numbers.
 - NEVER add % adjustments, contingencies, scaling factors, or risk buffers.
 - NEVER generate dollar totals or MH budgets by multiplying user quantities by rates.
 - NEVER provide unsolicited recommendations, next steps, or guidance.
@@ -1052,13 +1069,14 @@ HARD RULES — NEVER BREAK THESE:
 - If data doesn't exist, say so in one sentence. Stop there.
 - The estimator decides risk, assumptions, and adjustments — not you.
 
-RESPONSE GUIDELINES:
-- Lead with a brief answer to the question, then show supporting data.
-- Use a markdown table when showing multiple rate items. Columns: Job | CC | Description | MH/Unit | $/Unit | Crew Avg | Daily Prod | Confidence
-- When showing bid vs actual comparisons, use a side-by-side format: Job | CC | Description | Bid MH | Actual MH | Bid Crew | Actual Crew
-- When comparing, call out the key differences directly — don't just dump two tables.
-- Include PM context and Foreman Notes when they add useful color.
-- Keep it concise. The estimator will ask follow-ups if they want more."""
+RESPONSE FORMAT:
+- Lead with a brief answer, then show supporting data
+- Use a markdown table when showing multiple items
+- Always cite sources: job number, cost code, confidence level
+- Include PM context when it adds useful color
+- Keep it concise — the estimator will ask follow-ups if they want more
+
+""" + SCHEMA_DESCRIPTION
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1068,16 +1086,8 @@ RESPONSE GUIDELINES:
 def send_message(conversation_id: int | None, message: str) -> dict:
     """Main chat entry point — process a user message and return AI response.
 
-    Steps:
-    1. Create or load conversation
-    2. Save user message
-    3. Detect signals and search for relevant data
-    4. Build context block
-    5. Load conversation history for continuity
-    6. Call Claude API
-    7. Extract source metadata
-    8. Save AI response
-    9. Auto-title new conversations
+    Uses Claude tool-use loop: Claude calls run_sql to query the database
+    directly, then assembles a response from the results.
 
     Returns dict with response, sources, conversation_id.
     """
@@ -1118,133 +1128,117 @@ def send_message(conversation_id: int | None, message: str) -> dict:
         )
         conn.commit()
 
-        # 3. Detect signals from the message
-        signals = detect_signals(message)
-
-        # 4. Search for relevant rate items
-        rate_items = search_rate_items(signals)
-
-        # 4b. Fallback: check hj_costcode directly if rate_item results are sparse
-        costcode_items = []
-        if len(rate_items) < 10:
-            existing_pairs = {(r["job_id"], r["cost_code"]) for r in rate_items}
-            costcode_items = search_costcodes_direct(signals, existing_pairs)
-
-        # 4c. Search HeavyBid estimates if estimate intent detected
-        estimate_data = []
-        if signals.get("estimate_intent"):
-            estimate_data = search_estimates(signals)
-
-        # 5. Build context block
-        context_block = build_context_block(rate_items, signals, costcode_items, estimate_data)
-
-        # 6. Load last 5 messages for continuity
+        # 3. Load conversation history for continuity
         history_rows = conn.execute(
             """SELECT role, content FROM chat_messages
                WHERE conversation_id = ?
                ORDER BY created_at DESC LIMIT 10""",
             (conversation_id,),
         ).fetchall()
-        # Reverse to get chronological order, exclude the message we just saved
         history = [{"role": r["role"], "content": r["content"]} for r in reversed(history_rows)]
-        # Keep last 5 message pairs (up to 10 messages) for context,
-        # but the last one is the current user message which we'll rebuild
+        # Prior messages (excluding the one we just saved)
         prior_messages = history[:-1] if len(history) > 1 else []
-        # Limit to last ~10 messages (5 exchanges)
         prior_messages = prior_messages[-10:]
 
-        # 7. Build Claude API messages
+        # 4. Build Claude API messages
         api_messages = []
         for msg in prior_messages:
             api_messages.append({"role": msg["role"], "content": msg["content"]})
+        api_messages.append({"role": "user", "content": message})
 
-        # Current message with context
-        user_content = f"""{context_block}
-
----
-ESTIMATOR'S QUESTION:
-{message}
-
-Respond with facts only. Use a table if showing multiple rates. Be brief."""
-
-        api_messages.append({"role": "user", "content": user_content})
-
-        # Call Claude
+        # 5. Call Claude with tool-use loop
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=2048,
-            system=SYSTEM_PROMPT,
-            messages=api_messages,
-        )
+        executed_queries = []
+        ai_content = ""
 
-        ai_content = response.content[0].text
+        for iteration in range(MAX_TOOL_CALLS + 1):
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                tools=[TOOL_DEFINITION],
+                messages=api_messages,
+            )
 
-        # 8. Extract source metadata from rate items used
-        sources = []
-        seen_sources = set()
-        for item in rate_items:
-            source_key = (item["job_number"], item["cost_code"])
-            if source_key not in seen_sources:
-                seen_sources.add(source_key)
-                sources.append({
-                    "job_number": item["job_number"],
-                    "job_name": item["job_name"],
-                    "cost_code": item["cost_code"],
-                    "description": item.get("description"),
-                    "rate": item.get("act_mh_per_unit"),
-                    "rate_type": f"MH/{item.get('unit', 'unit')}" if item.get("act_mh_per_unit") else None,
-                    "confidence": item.get("confidence"),
-                    "has_pm_context": _has_pm_context(item["job_id"], item["cost_code"]),
-                    "has_foreman_notes": _has_foreman_notes(item["job_id"], item["cost_code"]),
-                    "source_type": "rate_card",
-                })
+            # Check if Claude wants to use a tool
+            if response.stop_reason == "tool_use":
+                # Process all tool use blocks in this response
+                tool_results = []
+                assistant_content = []
 
-        # Include costcode fallback items in sources
-        for item in costcode_items:
-            source_key = (item["job_number"], item["cost_code"])
-            if source_key not in seen_sources:
-                seen_sources.add(source_key)
-                sources.append({
-                    "job_number": item["job_number"],
-                    "job_name": item["job_name"],
-                    "cost_code": item["cost_code"],
-                    "description": item.get("description"),
-                    "rate": item.get("act_mh_per_unit"),
-                    "rate_type": f"MH/{item.get('unit', 'unit')}" if item.get("act_mh_per_unit") else None,
-                    "confidence": "raw_actuals",
-                    "source_type": "raw_actuals",
-                })
+                for block in response.content:
+                    if block.type == "text":
+                        assistant_content.append({"type": "text", "text": block.text})
+                    elif block.type == "tool_use":
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        })
+                        # Execute the SQL query
+                        query = block.input.get("query", "")
+                        logger.info("Chat SQL [iter %d]: %s", iteration, query[:200])
+                        result = execute_sql(query)
+                        executed_queries.append({"query": query, "result": result})
 
-        # Include estimate sources
-        for est in estimate_data:
-            sources.append({
-                "job_number": est.get("linked_job_number") or est.get("code", "?"),
-                "job_name": est.get("name", ""),
-                "cost_code": est.get("code", ""),
-                "description": f"Estimate: {est.get('name', '')}",
-                "rate": None,
-                "rate_type": None,
-                "confidence": "estimate",
-                "source_type": "estimate",
-                "bid_total": est.get("bid_total"),
-                "total_manhours": est.get("total_manhours"),
+                        # Format result for Claude
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": _format_sql_result(result),
+                        })
+
+                # Append assistant message with tool use
+                api_messages.append({"role": "assistant", "content": assistant_content})
+                # Append tool results
+                api_messages.append({"role": "user", "content": tool_results})
+
+            else:
+                # Claude is done — extract text response
+                ai_content = "\n".join(
+                    block.text for block in response.content if block.type == "text"
+                )
+                break
+        else:
+            # Hit max iterations — force a final text response.
+            # Add a user nudge so Claude knows to synthesize what it has.
+            api_messages.append({
+                "role": "user",
+                "content": [{"type": "text", "text": "Please provide your answer now based on the data you've already gathered. No more queries needed."}],
             })
+            try:
+                final_response = client.messages.create(
+                    model=MODEL,
+                    max_tokens=4096,
+                    system=SYSTEM_PROMPT,
+                    tools=[TOOL_DEFINITION],
+                    tool_choice={"type": "none"},
+                    messages=api_messages,
+                )
+                ai_content = "\n".join(
+                    block.text for block in final_response.content if block.type == "text"
+                ) or "I gathered data but couldn't complete the analysis. Please try a more specific question."
+            except Exception:
+                ai_content = "\n".join(
+                    block.text for block in response.content if block.type == "text"
+                ) or "I ran out of query attempts. Please try a more specific question."
 
+        # 6. Build source metadata from executed queries
+        sources = _extract_sources_from_queries(executed_queries)
         sources_json = json.dumps(sources) if sources else None
 
-        # 9. Save AI response
+        # 7. Save AI response
         conn.execute(
             "INSERT INTO chat_messages (conversation_id, role, content, sources_json, created_at) "
             "VALUES (?, 'assistant', ?, ?, ?)",
             (conversation_id, ai_content, sources_json, datetime.now().isoformat()),
         )
 
-        # 10. Auto-title new conversations from first message
+        # 8. Auto-title new conversations
         if is_new:
             title = message[:50].strip()
             if len(message) > 50:
-                # Try to break at a word boundary
                 title = title.rsplit(" ", 1)[0] if " " in title else title
                 title += "..."
             conn.execute(
@@ -1254,7 +1248,6 @@ Respond with facts only. Use a table if showing multiple rates. Be brief."""
 
         conn.commit()
 
-        # Get conversation title
         title_row = conn.execute(
             "SELECT title FROM chat_conversations WHERE id = ?",
             (conversation_id,),
@@ -1282,6 +1275,88 @@ Respond with facts only. Use a table if showing multiple rates. Be brief."""
         }
     finally:
         conn.close()
+
+
+def _format_sql_result(result: dict) -> str:
+    """Format SQL execution result as a concise string for Claude."""
+    if result.get("error"):
+        return f"ERROR: {result['error']}"
+
+    columns = result.get("columns", [])
+    rows = result.get("rows", [])
+
+    if not rows:
+        return "Query returned 0 rows."
+
+    # Tab-separated format — compact and easy for Claude to parse
+    lines = ["\t".join(str(c) for c in columns)]
+    for row in rows:
+        lines.append("\t".join(
+            str(v) if v is not None else "NULL" for v in row
+        ))
+
+    summary = f"{result['row_count']} rows"
+    if result.get("truncated"):
+        summary += " (truncated — more rows available, refine your query)"
+
+    lines.append(f"\n[{summary}]")
+    return "\n".join(lines)
+
+
+def _extract_sources_from_queries(executed_queries: list[dict]) -> list[dict]:
+    """Extract source metadata from SQL query results.
+
+    Scans query results for job_number and cost_code columns to build
+    the sources list for the frontend citation badges.
+    """
+    sources = []
+    seen = set()
+
+    for qinfo in executed_queries:
+        result = qinfo.get("result", {})
+        columns = result.get("columns", [])
+        rows = result.get("rows", [])
+
+        if not columns or not rows:
+            continue
+
+        # Find column indices for source-relevant fields
+        col_map = {c.lower(): i for i, c in enumerate(columns)}
+        jn_idx = col_map.get("job_number")
+        cc_idx = col_map.get("cost_code") or col_map.get("code") or col_map.get("activity")
+        desc_idx = col_map.get("description") or col_map.get("job_name") or col_map.get("name")
+        conf_idx = col_map.get("confidence")
+
+        if jn_idx is None:
+            continue
+
+        for row in rows:
+            job_number = str(row[jn_idx]) if row[jn_idx] else None
+            if not job_number:
+                continue
+
+            cost_code = str(row[cc_idx]) if cc_idx is not None and row[cc_idx] else None
+            source_key = (job_number, cost_code or "")
+            if source_key in seen:
+                continue
+            seen.add(source_key)
+
+            desc = str(row[desc_idx]) if desc_idx is not None and row[desc_idx] else None
+            conf = str(row[conf_idx]) if conf_idx is not None and row[conf_idx] else None
+
+            sources.append({
+                "job_number": job_number,
+                "cost_code": cost_code,
+                "description": desc,
+                "confidence": conf,
+                "source_type": "sql_query",
+            })
+
+            # Cap sources to avoid huge metadata
+            if len(sources) >= 50:
+                return sources
+
+    return sources
 
 
 def _has_pm_context(job_id: int, cost_code: str) -> bool:

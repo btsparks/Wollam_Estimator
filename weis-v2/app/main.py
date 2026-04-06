@@ -16,6 +16,7 @@ from app.api.documents import router as documents_router
 from app.api.settings import router as settings_router
 from app.api.chat import router as chat_router
 from app.api.estimates import router as estimates_router
+from app.api.bidding import router as bidding_router
 
 # Initialize database (runs migrations if needed)
 init_db()
@@ -33,6 +34,7 @@ app.include_router(documents_router)
 app.include_router(settings_router)
 app.include_router(chat_router)
 app.include_router(estimates_router)
+app.include_router(bidding_router)
 
 # Static files (CSS, JS, assets)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
