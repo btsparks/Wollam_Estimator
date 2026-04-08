@@ -2817,6 +2817,7 @@ async function renderBidDetail(bid) {
             <button class="filter-tab ${tab === 'overview' ? 'active' : ''}" onclick="switchBidTab('overview', ${bid.id})">Overview</button>
             <button class="filter-tab ${tab === 'sov' ? 'active' : ''}" onclick="switchBidTab('sov', ${bid.id})">Schedule of Values</button>
             <button class="filter-tab ${tab === 'documents' ? 'active' : ''}" onclick="switchBidTab('documents', ${bid.id})">Documents</button>
+            <button class="filter-tab ${tab === 'intelligence' ? 'active' : ''}" onclick="switchBidTab('intelligence', ${bid.id})">Intelligence</button>
         </div>
 
         <div id="bidTabContent"></div>
@@ -2825,6 +2826,7 @@ async function renderBidDetail(bid) {
     if (tab === 'overview') renderBidOverview(bid);
     else if (tab === 'sov') renderBidSOV(bid.id);
     else if (tab === 'documents') renderBidDocuments(bid);
+    else if (tab === 'intelligence') renderBidIntelligence(bid);
 }
 
 function switchBidTab(tab, bidId) {
@@ -2966,6 +2968,7 @@ async function renderBidSOV(bidId) {
             <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
                 <button class="btn btn-primary btn-sm" onclick="showSOVUpload(${bidId})">Upload Schedule</button>
                 <button class="btn btn-sm" onclick="showAddSOVItem(${bidId})">+ Add Item</button>
+                <button class="btn btn-sm" onclick="autoRateAll(${bidId})">Auto-Rate All</button>
                 <div style="flex:1;"></div>
                 <button class="btn btn-sm" onclick="showGroupManager(${bidId})">Pricing Groups (${groups.length})</button>
             </div>
@@ -2984,7 +2987,8 @@ async function renderBidSOV(bidId) {
                             <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);">Description</th>
                             <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:70px;">Unit</th>
                             <th style="padding:10px 12px;text-align:right;font-weight:600;color:var(--text-secondary);width:90px;">Qty</th>
-                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:140px;">Group</th>
+                            <th style="padding:10px 12px;text-align:right;font-weight:600;color:var(--text-secondary);width:100px;">Rate/Unit</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:120px;">Group</th>
                             <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);width:80px;">Actions</th>
                         </tr>
                     </thead>
@@ -2997,6 +3001,13 @@ async function renderBidSOV(bidId) {
                                 <td style="padding:8px 12px;">${escHtml(item.description)}</td>
                                 <td style="padding:8px 12px;color:var(--text-secondary);">${escHtml(item.unit || '—')}</td>
                                 <td style="padding:8px 12px;text-align:right;">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
+                                <td style="padding:8px 12px;text-align:right;">
+                                    ${item.unit_price != null
+                                        ? `<span style="font-weight:500;">$${fmtRate(item.unit_price)}</span>
+                                           ${item.rate_confidence ? `<br><span style="font-size:10px;color:${item.rate_confidence === 'high' ? 'var(--success-green)' : item.rate_confidence === 'medium' ? '#F59E0B' : 'var(--text-tertiary)'};">${item.rate_confidence.toUpperCase()}</span>` : ''}`
+                                        : `<button onclick="lookupSOVRate(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--wollam-navy);font-size:11px;text-decoration:underline;">Lookup</button>`
+                                    }
+                                </td>
                                 <td style="padding:8px 12px;">
                                     ${item.group_name ? `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${gc};display:inline-block;"></span>${escHtml(item.group_name)}</span>` : '<span style="color:var(--text-tertiary);">—</span>'}
                                 </td>
@@ -3008,7 +3019,8 @@ async function renderBidSOV(bidId) {
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                                     </button>
                                 </td>
-                            </tr>`;
+                            </tr>
+                            <tr><td colspan="7" style="padding:0;"><div id="rate-panel-${item.id}" style="display:none;"></div></td></tr>`;
                         }).join('')}
                     </tbody>
                 </table>
@@ -3473,7 +3485,13 @@ async function toggleDocDetail(docId) {
                 <label style="font-size:11px;font-weight:500;color:var(--text-secondary);">Extracted Text Preview</label>
                 <pre style="font-size:11px;background:var(--bg-hover);padding:8px;border-radius:6px;max-height:200px;overflow-y:auto;white-space:pre-wrap;margin-top:4px;">${escHtml(textPreview)}</pre>
             </div>
+            <div id="doc-changes-${docId}"></div>
         `;
+
+        // Load change summary if doc was updated
+        if (doc.sync_action === 'updated' || doc.previous_extracted_text) {
+            loadDocChanges(docId);
+        }
     } catch (err) {
         detail.innerHTML = `<p style="color:var(--danger-red);font-size:12px;">${escHtml(err.message)}</p>`;
     }
@@ -3559,6 +3577,591 @@ async function linkBidFolder(bidId) {
         btn.disabled = false;
         btn.textContent = 'Link Folder';
         alert('Error linking folder: ' + err.message);
+    }
+}
+
+// ── Intelligence Tab ──
+
+function riskBadge(rating) {
+    const map = {
+        critical: '<span class="badge" style="background:var(--danger-red);color:white;">CRITICAL</span>',
+        high: '<span class="badge" style="background:#EF4444;color:white;">HIGH</span>',
+        medium: '<span class="badge" style="background:#F59E0B;color:white;">MEDIUM</span>',
+        low: '<span class="badge" style="background:var(--success-green);color:white;">LOW</span>',
+    };
+    return map[rating] || '<span class="badge badge-not-started">—</span>';
+}
+
+function agentStatusIcon(status, isStale) {
+    if (status === 'not_run') return '<span style="color:var(--text-tertiary);">—</span>';
+    if (isStale) return '<span style="color:#F59E0B;" title="Stale — documents changed since last run">&#9888;</span>';
+    if (status === 'error') return '<span style="color:var(--danger-red);" title="Error">&#10005;</span>';
+    return '<span style="color:var(--success-green);" title="Complete">&#10003;</span>';
+}
+
+async function renderBidIntelligence(bid) {
+    const bidId = bid.id;
+    const tc = document.getElementById('bidTabContent');
+    tc.innerHTML = '<div class="empty-state"><p>Loading intelligence...</p></div>';
+
+    try {
+        const [intel, reports] = await Promise.all([
+            api(`/bidding/bids/${bidId}/intelligence-status`),
+            api(`/bidding/bids/${bidId}/reports`),
+        ]);
+
+        const agents = intel.agents || {};
+        const agentNames = Object.keys(agents).filter(n => n !== 'chief_estimator');
+        const hasReports = reports.length > 0;
+        const staleCount = intel.agents_needing_reanalysis || 0;
+        const chiefReport = reports.find(r => r.agent_name === 'chief_estimator');
+
+        // Overall risk from chief or highest sub-agent
+        let overallRisk = 'low';
+        const riskOrder = { low: 0, medium: 1, high: 2, critical: 3 };
+        reports.forEach(r => {
+            if (riskOrder[r.risk_rating] > riskOrder[overallRisk]) overallRisk = r.risk_rating;
+        });
+
+        const totalFlags = reports.reduce((sum, r) => sum + (r.flags_count || 0), 0);
+
+        tc.innerHTML = `
+            <!-- Agent Status Cards -->
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+                ${agentNames.map(name => {
+                    const a = agents[name] || {};
+                    return `
+                    <div class="card card-animate" style="padding:14px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <span style="font-size:12px;font-weight:600;color:var(--text-primary);">${escHtml(a.display_name || name)}</span>
+                            ${agentStatusIcon(a.status, a.is_stale)}
+                        </div>
+                        ${a.status !== 'not_run' ? `
+                            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${a.flags_count || 0} flag(s)</div>
+                            ${a.risk_rating ? riskBadge(a.risk_rating) : ''}
+                            ${a.is_stale ? '<div style="font-size:10px;color:#F59E0B;margin-top:4px;">Needs re-analysis</div>' : ''}
+                        ` : '<div style="font-size:11px;color:var(--text-tertiary);">Not run yet</div>'}
+                    </div>`;
+                }).join('')}
+            </div>
+
+            <!-- Action Bar -->
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;">
+                <button class="btn btn-primary btn-sm" id="runAllBtn" onclick="runAllAgents(${bidId})">Run All Agents</button>
+                <select id="singleAgentSelect" class="search-input" style="font-size:12px;padding:6px 10px;">
+                    <option value="">Run single agent...</option>
+                    ${agentNames.map(n => `<option value="${n}">${escHtml((agents[n] || {}).display_name || n)}</option>`).join('')}
+                </select>
+                <button class="btn btn-sm" onclick="runSingleAgent(${bidId})">Run</button>
+                <div style="flex:1;"></div>
+                ${hasReports ? `<span style="font-size:11px;color:var(--text-tertiary);">Last run: ${reports[0].updated_at ? new Date(reports[0].updated_at).toLocaleString() : '—'}</span>` : ''}
+            </div>
+
+            ${staleCount > 0 ? `
+            <div class="card" style="padding:12px 16px;margin-bottom:16px;border-left:3px solid #F59E0B;background:rgba(245,158,11,0.05);">
+                <span style="font-size:13px;color:#92400E;">&#9888; ${staleCount} agent report(s) are stale — documents have changed since last analysis. Re-run recommended.</span>
+            </div>` : ''}
+
+            ${!hasReports ? `
+            <div class="empty-state">
+                <h3>No Intelligence Reports</h3>
+                <p>${intel.total_documents > 0 ? 'Click "Run All Agents" to analyze bid documents.' : 'Upload or sync documents first, then run analysis.'}</p>
+            </div>` : `
+
+            <!-- Overall Risk Banner -->
+            <div class="card" style="padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;background:var(--bg-hover);">
+                <span style="font-size:13px;font-weight:600;">Overall Risk:</span>
+                ${riskBadge(overallRisk)}
+                <span style="font-size:12px;color:var(--text-secondary);">${totalFlags} flag(s) across ${reports.filter(r => r.agent_name !== 'chief_estimator').length} agent(s)</span>
+                <span style="font-size:12px;color:var(--text-tertiary);">&#183; ${intel.total_documents} documents analyzed</span>
+            </div>
+
+            <!-- Agent Report Accordion -->
+            <div id="agentAccordion">
+                ${reports.filter(r => r.agent_name !== 'chief_estimator').map(r => `
+                    <div class="card" style="margin-bottom:8px;overflow:hidden;">
+                        <div style="padding:12px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;background:var(--bg-surface);"
+                             onclick="toggleAgentReport('${r.agent_name}')">
+                            <span id="arrow_${r.agent_name}" style="transition:transform 0.2s;font-size:12px;color:var(--text-tertiary);">&#9654;</span>
+                            <span style="flex:1;font-size:13px;font-weight:600;">${escHtml((agents[r.agent_name] || {}).display_name || r.agent_name)}</span>
+                            ${riskBadge(r.risk_rating)}
+                            <span style="font-size:11px;color:var(--text-secondary);">${r.flags_count || 0} flag(s)</span>
+                        </div>
+                        <div id="report_${r.agent_name}" style="display:none;padding:0 16px 16px;border-top:1px solid var(--border-default);">
+                            ${renderAgentReport(r)}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+
+            ${chiefReport ? `
+            <!-- Chief Estimator Brief -->
+            <div class="card" style="margin-top:16px;padding:16px;border:2px solid var(--wollam-navy);">
+                <h3 style="font-size:14px;font-weight:600;margin:0 0 12px;color:var(--wollam-navy);">Chief Estimator Brief</h3>
+                ${renderChiefBrief(chiefReport)}
+            </div>` : ''}
+            `}
+        `;
+    } catch (err) {
+        tc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function toggleAgentReport(agentName) {
+    const el = document.getElementById(`report_${agentName}`);
+    const arrow = document.getElementById(`arrow_${agentName}`);
+    if (!el) return;
+    const open = el.style.display === 'block';
+    el.style.display = open ? 'none' : 'block';
+    if (arrow) arrow.style.transform = open ? '' : 'rotate(90deg)';
+}
+
+function renderAgentReport(report) {
+    const rj = report.report_json || {};
+    const name = report.agent_name;
+
+    let html = `<div style="margin-top:12px;">`;
+
+    // Summary
+    if (report.summary_text) {
+        html += `<p style="font-size:13px;color:var(--text-secondary);margin:0 0 12px;">${escHtml(report.summary_text)}</p>`;
+    }
+
+    if (name === 'legal_analyst') {
+        html += renderLegalReport(rj);
+    } else if (name === 'document_control') {
+        html += renderDocControlReport(rj);
+    } else if (name === 'qaqc_manager') {
+        html += renderQAQCReport(rj);
+    } else if (name === 'subcontract_manager') {
+        html += renderSubReport(rj);
+    } else {
+        // Generic: show flags
+        const flags = rj.flags || [];
+        if (flags.length) {
+            html += `<ul style="margin:0;padding-left:16px;">`;
+            flags.forEach(f => { html += `<li style="font-size:12px;margin-bottom:4px;">${escHtml(typeof f === 'string' ? f : JSON.stringify(f))}</li>`; });
+            html += `</ul>`;
+        }
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+function renderLegalReport(rj) {
+    let html = '';
+
+    // Bid type
+    if (rj.bid_type) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Bid Type</span><br>
+            <span style="font-size:13px;">${escHtml(rj.bid_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))}</span></div>`;
+    }
+
+    // LDs
+    const ld = rj.liquidated_damages || {};
+    if (ld.has_ld) {
+        html += `<div style="margin-bottom:12px;padding:10px;background:var(--bg-hover);border-radius:8px;">
+            <span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Liquidated Damages</span><br>
+            <span style="font-size:14px;font-weight:600;">${ld.amount_per_day ? '$' + fmt(ld.amount_per_day) + '/day' : 'Amount not specified'}</span>
+            ${ld.cap ? ` — Cap: $${fmt(ld.cap)}` : ' — <span style="color:var(--danger-red);font-weight:600;">NO CAP &#9888;</span>'}
+            ${ld.clause_reference ? `<br><span style="font-size:11px;color:var(--text-tertiary);">Ref: ${escHtml(ld.clause_reference)}</span>` : ''}
+        </div>`;
+    }
+
+    // Bonding
+    const bond = rj.bonding || {};
+    if (bond.bid_bond || bond.performance_bond || bond.payment_bond) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Bonding</span><br>
+            <span style="font-size:12px;">
+                Bid: ${bond.bid_bond ? '&#10003;' : '&#10005;'} &nbsp;
+                Performance: ${bond.performance_bond ? '&#10003;' : '&#10005;'} &nbsp;
+                Payment: ${bond.payment_bond ? '&#10003;' : '&#10005;'}
+                ${bond.estimated_cost_pct ? ` — Est. ${bond.estimated_cost_pct}%` : ''}
+            </span></div>`;
+    }
+
+    // Payment + Retainage
+    const pay = rj.payment_terms || {};
+    const ret = rj.retainage || {};
+    if (pay.frequency || ret.percentage) {
+        html += `<div style="margin-bottom:12px;font-size:12px;">`;
+        if (pay.frequency) html += `Payment: ${escHtml(pay.frequency)}${pay.net_days ? `, Net ${pay.net_days}` : ''} &nbsp;`;
+        if (ret.percentage) html += `Retainage: ${ret.percentage}%`;
+        html += `</div>`;
+    }
+
+    // Key Risks
+    const risks = rj.key_risks || [];
+    if (risks.length) {
+        html += `<div style="margin-bottom:8px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Key Risks</span></div>`;
+        risks.forEach(r => {
+            const color = r.severity === 'critical' || r.severity === 'high' ? 'var(--danger-red)' : r.severity === 'medium' ? '#F59E0B' : 'var(--text-tertiary)';
+            html += `<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;font-size:12px;">
+                <span style="color:${color};font-weight:700;min-width:16px;">&#9679;</span>
+                <div><span style="font-weight:500;">${escHtml(r.risk || '')}</span>
+                    ${r.clause ? `<span style="color:var(--text-tertiary);"> (${escHtml(r.clause)})</span>` : ''}
+                    ${r.recommendation ? `<br><span style="color:var(--text-secondary);font-style:italic;">${escHtml(r.recommendation)}</span>` : ''}
+                </div>
+            </div>`;
+        });
+    }
+
+    // Flags
+    const flags = rj.flags || [];
+    if (flags.length) {
+        html += `<div style="margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.05);border-radius:6px;">`;
+        flags.forEach(f => { html += `<div style="font-size:12px;color:#991B1B;margin-bottom:2px;">&#9888; ${escHtml(f)}</div>`; });
+        html += `</div>`;
+    }
+
+    return html;
+}
+
+function renderDocControlReport(rj) {
+    let html = '';
+
+    // Document index
+    const docs = rj.document_index || [];
+    if (docs.length) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Documents Reviewed (${rj.documents_reviewed || docs.length})</span>
+        <div style="max-height:200px;overflow-y:auto;margin-top:4px;">`;
+        docs.forEach(d => {
+            html += `<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border-default);">
+                <span style="font-weight:500;">${escHtml(d.filename || '')}</span>
+                ${d.category ? ` <span style="color:var(--text-tertiary);">[${escHtml(d.category)}]</span>` : ''}
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    // Addendum changes
+    const changes = rj.addendum_changes || [];
+    if (changes.length) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Addendum Changes</span>`;
+        changes.forEach(c => {
+            html += `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--border-default);">
+                <span style="font-weight:500;">Addendum ${c.addendum || '?'}</span> — ${escHtml(c.changes || '')}
+                ${c.impact ? `<br><span style="color:var(--text-secondary);font-style:italic;">${escHtml(c.impact)}</span>` : ''}
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    // Missing documents
+    const missing = rj.missing_documents || [];
+    if (missing.length) {
+        html += `<div style="margin-bottom:8px;padding:8px 12px;background:rgba(245,158,11,0.05);border-radius:6px;">
+            <span style="font-size:11px;font-weight:600;color:#92400E;">Missing Documents</span>`;
+        missing.forEach(m => { html += `<div style="font-size:12px;color:#92400E;margin-top:2px;">&#9888; ${escHtml(m)}</div>`; });
+        html += `</div>`;
+    }
+
+    return html;
+}
+
+function renderQAQCReport(rj) {
+    let html = '';
+
+    // Testing requirements
+    const tests = rj.testing_requirements || [];
+    if (tests.length) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Testing Requirements (${tests.length})</span>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px;">
+            <tr style="background:var(--bg-hover);"><th style="padding:4px 8px;text-align:left;">Test</th><th style="padding:4px 8px;text-align:left;">Frequency</th><th style="padding:4px 8px;text-align:left;">Spec</th><th style="padding:4px 8px;text-align:center;">Impact</th></tr>
+            ${tests.map(t => `<tr style="border-bottom:1px solid var(--border-default);">
+                <td style="padding:4px 8px;">${escHtml(t.test || '')}</td>
+                <td style="padding:4px 8px;">${escHtml(t.frequency || '')}</td>
+                <td style="padding:4px 8px;color:var(--text-tertiary);">${escHtml(t.spec_section || '')}</td>
+                <td style="padding:4px 8px;text-align:center;">${t.cost_impact === 'high' ? '<span style="color:var(--danger-red);font-weight:600;">HIGH</span>' : t.cost_impact === 'moderate' ? '<span style="color:#F59E0B;">MOD</span>' : '<span style="color:var(--text-tertiary);">LOW</span>'}</td>
+            </tr>`).join('')}
+        </table></div>`;
+    }
+
+    // Certifications
+    const certs = rj.certifications_required || [];
+    if (certs.length) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Certifications Required</span>
+        <ul style="margin:4px 0;padding-left:16px;">`;
+        certs.forEach(c => { html += `<li style="font-size:12px;">${escHtml(c)}</li>`; });
+        html += `</ul></div>`;
+    }
+
+    // Submittals
+    const subs = rj.submittals_required || [];
+    if (subs.length) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Submittals (${subs.length})</span>
+        <div style="margin-top:4px;">`;
+        subs.forEach(s => {
+            html += `<div style="font-size:12px;padding:3px 0;">${escHtml(s.item || '')} ${s.spec_section ? `<span style="color:var(--text-tertiary);">[${escHtml(s.spec_section)}]</span>` : ''} ${s.advance_days ? `<span style="color:var(--text-secondary);">— ${s.advance_days}d advance</span>` : ''}</div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    // Flags
+    const flags = rj.flags || [];
+    if (flags.length) {
+        html += `<div style="padding:8px 12px;background:rgba(239,68,68,0.05);border-radius:6px;">`;
+        flags.forEach(f => { html += `<div style="font-size:12px;color:#991B1B;margin-bottom:2px;">&#9888; ${escHtml(f)}</div>`; });
+        html += `</div>`;
+    }
+
+    return html;
+}
+
+function renderSubReport(rj) {
+    let html = '';
+
+    // Recommended sub scopes
+    const subs = rj.recommended_sub_scopes || [];
+    if (subs.length) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Recommended Subcontract Scopes</span>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px;margin-top:8px;">`;
+        subs.forEach(s => {
+            html += `<div style="padding:10px;border:1px solid var(--border-default);border-radius:8px;font-size:12px;">
+                <div style="font-weight:600;margin-bottom:4px;">${escHtml(s.discipline || '')}</div>
+                <div style="color:var(--text-secondary);margin-bottom:4px;">${escHtml(s.scope_summary || '')}</div>
+                ${s.sov_items && s.sov_items.length ? `<div style="color:var(--text-tertiary);">SOV Items: ${s.sov_items.join(', ')}</div>` : ''}
+                ${s.estimated_value_pct ? `<div style="color:var(--text-tertiary);">~${s.estimated_value_pct}% of bid</div>` : ''}
+                ${(s.special_requirements || []).length ? `<div style="color:#92400E;margin-top:4px;">${s.special_requirements.map(r => escHtml(r)).join(', ')}</div>` : ''}
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    // Self-perform
+    const self = rj.self_perform_recommended || [];
+    if (self.length) {
+        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Self-Perform Recommended</span>
+        <ul style="margin:4px 0;padding-left:16px;">`;
+        self.forEach(s => {
+            html += `<li style="font-size:12px;margin-bottom:4px;"><span style="font-weight:500;">${escHtml(s.discipline || '')}</span> — ${escHtml(s.reason || '')}</li>`;
+        });
+        html += `</ul></div>`;
+    }
+
+    // Flags
+    const flags = rj.flags || [];
+    if (flags.length) {
+        html += `<div style="padding:8px 12px;background:rgba(239,68,68,0.05);border-radius:6px;">`;
+        flags.forEach(f => { html += `<div style="font-size:12px;color:#991B1B;margin-bottom:2px;">&#9888; ${escHtml(f)}</div>`; });
+        html += `</div>`;
+    }
+
+    return html;
+}
+
+function renderChiefBrief(report) {
+    const rj = report.report_json || {};
+    const sovIntel = rj.sov_intelligence || [];
+    let html = '';
+
+    if (sovIntel.length === 0) {
+        return '<p style="font-size:13px;color:var(--text-tertiary);">No SOV-specific intelligence available. Run sub-agents with SOV items populated.</p>';
+    }
+
+    html += `<div style="font-size:13px;">`;
+    sovIntel.forEach(item => {
+        html += `<div style="margin-bottom:12px;padding:10px;border:1px solid var(--border-default);border-radius:8px;">
+            <div style="font-weight:600;margin-bottom:4px;">Item ${escHtml(item.item_number || '?')}: ${escHtml(item.description || '')}</div>`;
+        (item.findings || []).forEach(f => {
+            const icon = f.source === 'qaqc_manager' ? '&#128270;' : f.source === 'subcontract_manager' ? '&#128736;' : f.source === 'legal_analyst' ? '&#9878;' : '&#128196;';
+            html += `<div style="font-size:12px;color:var(--text-secondary);padding:2px 0 2px 8px;border-left:2px solid var(--border-default);margin:4px 0;">
+                ${icon} <span style="font-weight:500;text-transform:capitalize;">${escHtml(f.source.replace(/_/g, ' '))}:</span> ${escHtml(f.detail || '')}
+            </div>`;
+        });
+        html += `</div>`;
+    });
+    html += `</div>`;
+
+    // All flags
+    const allFlags = rj.all_flags || [];
+    if (allFlags.length) {
+        html += `<div style="margin-top:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">All Flags (${allFlags.length})</span>`;
+        allFlags.forEach(f => {
+            html += `<div style="font-size:12px;color:#991B1B;padding:2px 0;">&#9888; <span style="color:var(--text-tertiary);">[${escHtml(f.source.replace(/_/g, ' '))}]</span> ${escHtml(f.flag)}</div>`;
+        });
+        html += `</div>`;
+    }
+
+    return html;
+}
+
+async function runAllAgents(bidId) {
+    const btn = document.getElementById('runAllBtn');
+    btn.disabled = true;
+    btn.textContent = 'Running agents...';
+
+    try {
+        await api(`/bidding/bids/${bidId}/analyze`, { method: 'POST' });
+        // Reload the tab
+        const bid = await api(`/bidding/bids/${bidId}`);
+        renderBidIntelligence(bid);
+    } catch (err) {
+        alert('Error running agents: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Run All Agents';
+    }
+}
+
+async function runSingleAgent(bidId) {
+    const select = document.getElementById('singleAgentSelect');
+    const agentName = select.value;
+    if (!agentName) { alert('Select an agent first'); return; }
+
+    select.disabled = true;
+    try {
+        await api(`/bidding/bids/${bidId}/analyze/${agentName}`, { method: 'POST' });
+        const bid = await api(`/bidding/bids/${bidId}`);
+        renderBidIntelligence(bid);
+    } catch (err) {
+        alert('Error: ' + err.message);
+        select.disabled = false;
+    }
+}
+
+// ── Rate Lookup (SOV) ──
+
+async function lookupSOVRate(itemId, bidId) {
+    const panel = document.getElementById(`rate-panel-${itemId}`);
+    if (!panel) return;
+
+    if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+    panel.innerHTML = '<p style="font-size:12px;color:var(--text-tertiary);padding:8px;">Looking up rates...</p>';
+
+    try {
+        const result = await api(`/bidding/bids/${bidId}/sov/${itemId}/lookup`, { method: 'POST' });
+        const matches = result.matches || [];
+
+        if (matches.length === 0) {
+            panel.innerHTML = '<p style="font-size:12px;color:var(--text-tertiary);padding:8px;">No matching historical rates found.</p>';
+            return;
+        }
+
+        panel.innerHTML = `
+            <div style="padding:8px;background:var(--bg-hover);border-radius:6px;margin-top:4px;">
+                <table style="width:100%;border-collapse:collapse;font-size:11px;">
+                    <thead><tr style="border-bottom:1px solid var(--border-default);">
+                        <th style="padding:4px 6px;text-align:left;">Cost Code</th>
+                        <th style="padding:4px 6px;text-align:right;">MH/Unit</th>
+                        <th style="padding:4px 6px;text-align:right;">$/Unit</th>
+                        <th style="padding:4px 6px;text-align:right;">Min</th>
+                        <th style="padding:4px 6px;text-align:right;">Max</th>
+                        <th style="padding:4px 6px;text-align:center;">Jobs</th>
+                        <th style="padding:4px 6px;text-align:center;">Conf.</th>
+                        <th style="padding:4px 6px;text-align:center;"></th>
+                    </tr></thead>
+                    <tbody>
+                        ${matches.slice(0, 8).map(m => `
+                        <tr style="border-bottom:1px solid var(--border-default);">
+                            <td style="padding:4px 6px;font-family:monospace;" title="${escAttr(m.description)}">${escHtml(m.cost_code)}</td>
+                            <td style="padding:4px 6px;text-align:right;">${fmtRate(m.mh_per_unit)}</td>
+                            <td style="padding:4px 6px;text-align:right;font-weight:500;">$${fmtRate(m.dollar_per_unit)}</td>
+                            <td style="padding:4px 6px;text-align:right;color:var(--text-tertiary);">${fmtRate(m.min_rate)}</td>
+                            <td style="padding:4px 6px;text-align:right;color:var(--text-tertiary);">${fmtRate(m.max_rate)}</td>
+                            <td style="padding:4px 6px;text-align:center;">${m.job_count}</td>
+                            <td style="padding:4px 6px;text-align:center;">${m.confidence === 'high' ? '<span style="color:var(--success-green);font-weight:600;">HIGH</span>' : m.confidence === 'medium' ? '<span style="color:#F59E0B;">MED</span>' : '<span style="color:var(--text-tertiary);">LOW</span>'}</td>
+                            <td style="padding:4px 6px;text-align:center;">
+                                <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;"
+                                    onclick="applyRate(${itemId}, ${bidId}, ${m.dollar_per_unit}, '${escAttr(m.cost_code)}', ${m.job_count}, '${escAttr(m.confidence)}')">Apply</button>
+                            </td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } catch (err) {
+        panel.innerHTML = `<p style="font-size:12px;color:var(--danger-red);padding:8px;">${escHtml(err.message)}</p>`;
+    }
+}
+
+async function applyRate(itemId, bidId, rate, costCode, jobCount, confidence) {
+    try {
+        await api(`/bidding/sov/${itemId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                unit_price: rate,
+                rate_source: `Historical: CC ${costCode} (${jobCount} jobs)`,
+                rate_confidence: confidence,
+                cost_code: costCode,
+            }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+// ── Document Change Summaries ──
+
+async function loadDocChanges(docId) {
+    const container = document.getElementById(`doc-changes-${docId}`);
+    if (!container) return;
+    container.innerHTML = '<p style="font-size:11px;color:var(--text-tertiary);margin-top:8px;">Loading change summary...</p>';
+
+    try {
+        const result = await api(`/bidding/documents/${docId}/changes`);
+        if (!result.has_changes) {
+            container.innerHTML = '';
+            return;
+        }
+
+        const c = result.changes;
+        let html = `<div style="margin-top:8px;padding:10px;border:1px solid #F59E0B;border-radius:6px;background:rgba(245,158,11,0.04);">
+            <span style="font-size:11px;font-weight:600;color:#92400E;">Changes Detected</span>`;
+
+        if (c.summary) {
+            html += `<p style="font-size:12px;color:var(--text-secondary);margin:4px 0 8px;">${escHtml(c.summary)}</p>`;
+        }
+
+        const additions = c.additions || [];
+        const deletions = c.deletions || [];
+        const modifications = c.modifications || [];
+
+        if (additions.length) {
+            html += `<div style="margin-bottom:4px;">`;
+            additions.forEach(a => { html += `<div style="font-size:11px;color:#166534;">+ ${escHtml(a)}</div>`; });
+            html += `</div>`;
+        }
+        if (deletions.length) {
+            html += `<div style="margin-bottom:4px;">`;
+            deletions.forEach(d => { html += `<div style="font-size:11px;color:#991B1B;">- ${escHtml(d)}</div>`; });
+            html += `</div>`;
+        }
+        if (modifications.length) {
+            html += `<div style="margin-bottom:4px;">`;
+            modifications.forEach(m => { html += `<div style="font-size:11px;color:#92400E;">~ ${escHtml(m)}</div>`; });
+            html += `</div>`;
+        }
+
+        const impact = c.potential_sov_impact || [];
+        if (impact.length) {
+            html += `<div style="margin-top:4px;"><span style="font-size:10px;font-weight:600;color:#92400E;">SOV Impact:</span>`;
+            impact.forEach(i => { html += `<div style="font-size:11px;color:#92400E;">${escHtml(i)}</div>`; });
+            html += `</div>`;
+        }
+
+        html += `</div>`;
+        container.innerHTML = html;
+    } catch (err) {
+        container.innerHTML = '';
+    }
+}
+
+async function autoRateAll(bidId) {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Rating...';
+
+    try {
+        const result = await api(`/bidding/bids/${bidId}/sov/auto-rate`, { method: 'POST' });
+        alert(`Auto-rate complete: ${result.matched} matched, ${result.ambiguous} ambiguous, ${result.no_match} no match, ${result.skipped} skipped`);
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Auto-Rate All';
     }
 }
 

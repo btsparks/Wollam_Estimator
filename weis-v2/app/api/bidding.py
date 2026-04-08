@@ -20,6 +20,8 @@ from app.database import get_connection
 from app.services.document_extract import extract_text
 from app.services.sov_parser import parse_sov_file
 from app.services.bid_sync import resolve_bid_folder, sync_bid_documents
+from app.services.document_chunker import chunk_document, chunk_all_bid_documents
+from app.services.rate_lookup import lookup_rates_for_sov_item, auto_populate_sov_rates
 
 logger = logging.getLogger(__name__)
 
@@ -345,13 +347,25 @@ async def upload_document(
         conn.commit()
 
         doc_id = cursor.lastrowid
+        conn.close()
+        conn = None
+
+        # Chunk the document for agent analysis
+        if extraction_status == "complete":
+            try:
+                chunk_document(doc_id)
+            except Exception as e:
+                logger.warning("Chunking failed for doc %d: %s", doc_id, e)
+
+        conn = get_connection()
         row = conn.execute("SELECT * FROM bid_documents WHERE id = ?", (doc_id,)).fetchone()
         result = dict(row)
         # Don't send full extracted text in response
         result.pop("extracted_text", None)
         return result
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @router.get("/bids/{bid_id}/documents")
@@ -865,5 +879,83 @@ async def unassign_items(group_id: int, body: AssignItems):
             )
         conn.commit()
         return {"unassigned": len(body.item_ids), "group_id": group_id}
+    finally:
+        conn.close()
+
+
+# ── Document Chunking ──────────────────────────────────────────
+
+@router.post("/bids/{bid_id}/rechunk")
+async def rechunk_documents(bid_id: int):
+    """Delete existing chunks and re-chunk all documents for a bid."""
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT id FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+    finally:
+        conn.close()
+
+    result = chunk_all_bid_documents(bid_id)
+    return result
+
+
+# ── Historical Rate Lookup ─────────────────────────────────────
+
+class RateLookupRequest(BaseModel):
+    description: str
+    unit: Optional[str] = None
+    quantity: Optional[float] = None
+
+
+@router.post("/bids/{bid_id}/sov/{item_id}/lookup")
+async def lookup_sov_rates(bid_id: int, item_id: int):
+    """Find historical rates for a specific SOV item."""
+    conn = get_connection()
+    try:
+        item = conn.execute(
+            "SELECT * FROM bid_sov_item WHERE id = ? AND bid_id = ?",
+            (item_id, bid_id),
+        ).fetchone()
+        if not item:
+            raise HTTPException(status_code=404, detail="SOV item not found")
+    finally:
+        conn.close()
+
+    from dataclasses import asdict
+    matches = lookup_rates_for_sov_item(
+        item["description"], item["unit"], item["quantity"],
+    )
+    return {"item_id": item_id, "matches": [asdict(m) for m in matches]}
+
+
+@router.post("/bids/{bid_id}/sov/auto-rate")
+async def auto_rate_sov(bid_id: int):
+    """Auto-populate historical rates for all SOV items in a bid."""
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT id FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+    finally:
+        conn.close()
+
+    result = auto_populate_sov_rates(bid_id)
+    return result
+
+
+@router.get("/bids/{bid_id}/sov/{item_id}/rates")
+async def get_sov_rates(bid_id: int, item_id: int):
+    """Get rate match candidates for a SOV item (cached from last lookup)."""
+    conn = get_connection()
+    try:
+        item = conn.execute(
+            "SELECT id, description, unit, quantity, rate_source, rate_confidence, unit_price "
+            "FROM bid_sov_item WHERE id = ? AND bid_id = ?",
+            (item_id, bid_id),
+        ).fetchone()
+        if not item:
+            raise HTTPException(status_code=404, detail="SOV item not found")
+        return dict(item)
     finally:
         conn.close()

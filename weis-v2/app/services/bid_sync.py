@@ -16,6 +16,8 @@ from pathlib import Path
 from app.config import ESTIMATING_ROOT
 from app.database import get_connection
 from app.services.document_extract import extract_text
+from app.services.document_chunker import chunk_document
+from app.agents.runner import mark_reports_stale
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +193,7 @@ def sync_bid_documents(bid_id: int) -> dict:
                         extraction_warning = str(e)
                         logger.warning("Extraction failed for %s: %s", fpath.name, e)
 
-                    conn.execute(
+                    cursor = conn.execute(
                         """INSERT INTO bid_documents
                            (bid_id, filename, file_type, file_size_bytes, doc_category,
                             extraction_status, extraction_warning, page_count, word_count,
@@ -205,10 +207,27 @@ def sync_bid_documents(bid_id: int) -> dict:
                             extracted_text, dropbox_path,
                         ),
                     )
+                    conn.commit()
+                    # Chunk the new document
+                    if extraction_status == "complete":
+                        try:
+                            chunk_document(cursor.lastrowid)
+                        except Exception as ce:
+                            logger.warning("Chunking failed for %s: %s", fpath.name, ce)
                     counts["new"] += 1
 
                 elif existing["file_hash"] != file_hash:
-                    # File changed — re-extract and update
+                    # File changed — save previous text for diffing, then re-extract
+                    old_doc = conn.execute(
+                        "SELECT extracted_text FROM bid_documents WHERE id = ?",
+                        (existing["id"],),
+                    ).fetchone()
+                    if old_doc and old_doc["extracted_text"]:
+                        conn.execute(
+                            "UPDATE bid_documents SET previous_extracted_text = ? WHERE id = ?",
+                            (old_doc["extracted_text"], existing["id"]),
+                        )
+
                     extracted_text = ""
                     extraction_status = "pending"
                     extraction_warning = None
@@ -241,6 +260,13 @@ def sync_bid_documents(bid_id: int) -> dict:
                             existing["id"],
                         ),
                     )
+                    conn.commit()
+                    # Re-chunk the updated document
+                    if extraction_status == "complete":
+                        try:
+                            chunk_document(existing["id"])
+                        except Exception as ce:
+                            logger.warning("Re-chunking failed for %s: %s", fpath.name, ce)
                     counts["updated"] += 1
 
                 else:
@@ -273,6 +299,15 @@ def sync_bid_documents(bid_id: int) -> dict:
                     (row["id"],),
                 )
                 counts["removed"] += 1
+
+        # Mark agent reports stale if documents changed
+        if counts["new"] > 0 or counts["updated"] > 0:
+            try:
+                stale_count = mark_reports_stale(bid_id)
+                if stale_count:
+                    logger.info("Marked %d agent report(s) stale for bid %d", stale_count, bid_id)
+            except Exception as e:
+                logger.warning("Failed to mark reports stale: %s", e)
 
         # Update bid sync metadata
         conn.execute(

@@ -34,6 +34,14 @@ weis-v2/
 │   │   ├── diary.py        # Diary import/synthesis endpoints
 │   │   ├── documents.py    # Document upload/enrichment endpoints
 │   │   └── settings.py     # Rate settings, import, and recast cost endpoints
+│   ├── agents/             # Bid intelligence agents (Layer 2)
+│   │   ├── base.py         # BaseAgent class + AgentReport dataclass
+│   │   ├── runner.py       # Agent execution engine + staleness tracking
+│   │   ├── document_control.py  # Document index, addendum changes, missing docs
+│   │   ├── legal_analyst.py     # Contract risk analysis (LDs, bonding, retainage)
+│   │   ├── qaqc_manager.py     # Testing, certifications, submittals, inspections
+│   │   ├── subcontract_manager.py  # Sub scope vs self-perform recommendations
+│   │   └── chief_estimator.py  # Aggregator — combines all agent reports by SOV item
 │   ├── services/           # Business logic
 │   │   ├── interview.py    # Interview flow logic (load job, present cost codes, save context)
 │   │   ├── chat.py         # AI chat engine (query builder, context assembly, Claude API)
@@ -42,7 +50,10 @@ weis-v2/
 │   │   ├── diary_synthesis.py # AI synthesis of diary entries → PM/CC context (Claude Haiku)
 │   │   ├── document_extract.py # Text extraction from PDF/Excel/CSV/TXT uploads
 │   │   ├── document_enrichment.py # AI enrichment of context from uploaded documents
+│   │   ├── document_chunker.py # Section-aware doc chunking for agent analysis
+│   │   ├── document_diff.py    # AI-powered document change summaries
 │   │   ├── rate_import.py  # Parse PayClass.txt + EquipmentSetup.txt from HeavyJob
+│   │   ├── rate_lookup.py  # Historical rate lookup for SOV items
 │   │   ├── cost_recalc.py  # Recast cost calculation engine (hours × current rates)
 │   │   └── bid_sync.py     # Dropbox-linked bid document sync (resolve folder, categorize, extract)
 │   ├── hcss/               # HCSS API integration (CARRIED OVER — working)
@@ -65,15 +76,17 @@ weis-v2/
 ├── data/
 │   ├── documents/          # Uploaded PM context documents (per job_id subfolder)
 │   └── db/
-│       └── weis.db         # SQLite database (schema v2.10, populated with HeavyJob + diary + rate data)
+│       └── weis.db         # SQLite database (schema v2.11, populated with HeavyJob + diary + rate data)
 ├── scripts/
 │   └── sync_everything.py  # HCSS sync script (CARRIED OVER — working)
-├── tests/                  # pytest tests
+├── tests/                  # pytest tests (237 passing)
 │   ├── test_interview.py   # Interview API tests
 │   ├── test_diary.py       # Diary parser + API tests
 │   ├── test_documents.py   # Document upload + extraction tests
 │   ├── test_settings.py    # Rate import, settings API, recast cost tests
-│   └── test_bid_sync.py    # Dropbox bid sync + API tests
+│   ├── test_bid_sync.py    # Dropbox bid sync + API tests
+│   ├── test_agents.py      # Agent framework, runner, staleness, chunking tests
+│   └── test_rate_lookup.py # Historical rate lookup + auto-populate tests
 ├── docs/                   # Feature specs and architecture docs
 │   ├── ARCHITECTURE.md     # Technical design
 │   ├── PM_CONTEXT_INTERVIEW.md  # Feature spec
@@ -89,7 +102,7 @@ weis-v2/
 ## What's Built
 - **`app/hcss/`** — Complete HCSS HeavyJob API integration (OAuth, pagination, retry, rate limiting)
 - **`app/transform/`** — Rate card generation, discipline mapping, field intelligence calculator
-- **`app/database.py`** — Schema v2.10 with HeavyJob tables + diary_entry + job_document + pm_context/cc_context + labor_rate/equipment_rate + bidding + Dropbox sync
+- **`app/database.py`** — Schema v2.11 with HeavyJob tables + diary_entry + job_document + pm_context/cc_context + labor_rate/equipment_rate + bidding + Dropbox sync + agent intelligence
 - **`app/config.py`** — Environment variable management
 - **`app/main.py`** — FastAPI app with interview, chat, and diary routers
 - **`app/api/interview.py`** — PM Context Interview endpoints
@@ -106,11 +119,23 @@ weis-v2/
 - **`app/services/cost_recalc.py`** — Recast cost engine: actual hours × current loaded rates per cost code
 - **`static/`** — Single-page frontend with interview + diary UI
 - **`config/discipline_map.yaml`** — Cost code to discipline mapping rules
-- **`app/services/bid_sync.py`** — Dropbox-linked bid document sync (folder resolution, categorization, extraction, change tracking)
+- **`app/services/bid_sync.py`** — Dropbox-linked bid document sync (folder resolution, categorization, extraction, change tracking, staleness)
+- **`app/services/document_chunker.py`** — Section-aware document chunking for agent analysis
+- **`app/services/rate_lookup.py`** — Historical rate lookup for SOV items (AI keyword mapping + rate_item search)
+- **`app/services/document_diff.py`** — AI-powered document change summaries (previous vs current text)
+- **`app/agents/`** — Bid intelligence agent framework (5 agents)
+  - `base.py` — BaseAgent class + AgentReport dataclass + batch/parse/merge logic
+  - `runner.py` — Agent execution engine (run_agent, run_all_agents, mark_reports_stale, intelligence_status)
+  - `document_control.py` — Document index, addendum changes, missing documents
+  - `legal_analyst.py` — Contract risks, LDs, bonding, retainage, insurance, payment terms
+  - `qaqc_manager.py` — Testing requirements, certifications, submittals, inspections
+  - `subcontract_manager.py` — Sub scope recommendations vs self-perform
+  - `chief_estimator.py` — Aggregates all sub-agent reports by SOV item
+- **`app/api/agents.py`** — Agent analysis + reports + intelligence status endpoints
 - **`scripts/sync_everything.py`** — Full HCSS data sync with adaptive concurrency
 
 ## What Needs To Be Built
-1. **AI Estimating Chat** — see `docs/AI_CHAT.md`
+1. **AI Estimating Chat improvements** — see `docs/AI_CHAT.md`
 
 ## Database Overview
 

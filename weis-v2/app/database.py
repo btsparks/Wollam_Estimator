@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.10"
+SCHEMA_VERSION = "2.11"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -1357,6 +1357,25 @@ def _migrate_2_9_to_2_10(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.10'")
 
 
+def _migrate_2_10_to_2_11(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.10 to 2.11: Agent intelligence layer.
+
+    Changes:
+    1. Add is_stale to agent_reports — marks reports needing re-analysis
+    2. Add previous_extracted_text to bid_documents — for change diffing
+    """
+    for stmt in [
+        "ALTER TABLE agent_reports ADD COLUMN is_stale INTEGER DEFAULT 0",
+        "ALTER TABLE bid_documents ADD COLUMN previous_extracted_text TEXT",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    conn.execute("UPDATE schema_version SET version = '2.11'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1434,6 +1453,9 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.9"
             if current == "2.9":
                 _migrate_2_9_to_2_10(conn)
+                current = "2.10"
+            if current == "2.10":
+                _migrate_2_10_to_2_11(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:
