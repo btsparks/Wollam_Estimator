@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.config import BID_DOCUMENTS_DIR, ESTIMATING_ROOT, DROPBOX_ROOT, ANTHROPIC_API_KEY
+from app.config import BID_DOCUMENTS_DIR, ESTIMATING_ROOT, DROPBOX_ROOT, ANTHROPIC_API_KEY, VECTOR_SEARCH_ENABLED
 from app.database import get_connection
 from app.services.document_extract import extract_text
 from app.services.sov_parser import parse_sov_file
@@ -275,6 +275,14 @@ async def delete_bid(bid_id: int):
         if not existing:
             raise HTTPException(status_code=404, detail="Bid not found")
 
+        # Clean up vector embeddings
+        if VECTOR_SEARCH_ENABLED:
+            try:
+                from app.services.vector_store import delete_bid_collection
+                delete_bid_collection(bid_id)
+            except Exception as e:
+                logger.warning("Failed to delete vector collection for bid %d: %s", bid_id, e)
+
         # Delete children first (foreign key order)
         conn.execute("DELETE FROM bid_document_chunks WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM bid_documents WHERE bid_id = ?", (bid_id,))
@@ -379,6 +387,14 @@ async def upload_document(
             except Exception as e:
                 logger.warning("Chunking failed for doc %d: %s", doc_id, e)
 
+            # Embed chunks into vector store
+            if VECTOR_SEARCH_ENABLED:
+                try:
+                    from app.services.vector_store import embed_document_chunks
+                    embed_document_chunks(bid_id, doc_id)
+                except Exception as e:
+                    logger.warning("Embedding failed for doc %d: %s", doc_id, e)
+
         conn = get_connection()
         row = conn.execute("SELECT * FROM bid_documents WHERE id = ?", (doc_id,)).fetchone()
         result = dict(row)
@@ -476,6 +492,14 @@ async def delete_document(doc_id: int):
         existing = conn.execute("SELECT * FROM bid_documents WHERE id = ?", (doc_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Document not found")
+
+        # Remove vector embeddings
+        if VECTOR_SEARCH_ENABLED:
+            try:
+                from app.services.vector_store import remove_document_embeddings
+                remove_document_embeddings(existing["bid_id"], doc_id)
+            except Exception as e:
+                logger.warning("Failed to remove embeddings for doc %d: %s", doc_id, e)
 
         conn.execute("DELETE FROM bid_document_chunks WHERE document_id = ?", (doc_id,))
         conn.execute("DELETE FROM bid_documents WHERE id = ?", (doc_id,))
@@ -1197,6 +1221,15 @@ async def rechunk_documents(bid_id: int):
         conn.close()
 
     result = chunk_all_bid_documents(bid_id)
+
+    # Rebuild vector index for this bid after re-chunking
+    if VECTOR_SEARCH_ENABLED:
+        try:
+            from app.services.vector_store import rebuild_bid_index
+            rebuild_bid_index(bid_id)
+        except Exception as e:
+            logger.warning("Vector index rebuild failed for bid %d: %s", bid_id, e)
+
     return result
 
 

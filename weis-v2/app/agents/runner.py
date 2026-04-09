@@ -9,8 +9,9 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from app.config import VECTOR_SEARCH_ENABLED
 from app.database import get_connection
-from app.agents.base import AgentReport
+from app.agents.base import BaseAgent, AgentReport
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,72 @@ def _load_doc_chunks(bid_id: int, document_ids: list[int] | None = None) -> list
         conn.close()
 
 
+def _load_doc_chunks_smart(
+    bid_id: int,
+    agent: BaseAgent | None = None,
+    document_ids: list[int] | None = None,
+) -> list[dict]:
+    """Load document chunks — vector search when available, brute-force otherwise.
+
+    Uses semantic search to select the most relevant chunks for the agent's
+    domain. Falls back to loading all chunks when:
+    - VECTOR_SEARCH_ENABLED is False
+    - The bid's ChromaDB collection is empty
+    - The agent returns no search queries
+    - ChromaDB is unavailable (error)
+    """
+    if VECTOR_SEARCH_ENABLED and agent and agent.get_search_queries():
+        try:
+            from app.services.vector_store import search_bid, collection_has_embeddings
+
+            if collection_has_embeddings(bid_id):
+                queries = agent.get_search_queries()
+                seen_ids = set()
+                scored_chunks = []
+
+                for query in queries:
+                    results = search_bid(bid_id, query, n_results=20)
+                    for r in results:
+                        chunk_id = r.get("chunk_id")
+                        if chunk_id and chunk_id not in seen_ids:
+                            seen_ids.add(chunk_id)
+                            scored_chunks.append(r)
+
+                if scored_chunks:
+                    # Sort by distance (lower = more relevant)
+                    scored_chunks.sort(key=lambda x: x.get("distance", 1.0))
+
+                    # Cap total context to ~50K chars
+                    total_chars = 0
+                    selected = []
+                    for chunk in scored_chunks:
+                        chunk_len = len(chunk.get("chunk_text", ""))
+                        if total_chars + chunk_len > 50_000:
+                            break
+                        selected.append({
+                            "chunk_text": chunk["chunk_text"],
+                            "section_heading": chunk.get("section_heading"),
+                            "filename": chunk.get("filename"),
+                            "doc_category": chunk.get("doc_category"),
+                        })
+                        total_chars += chunk_len
+
+                    if selected:
+                        logger.info(
+                            "Vector search for agent %s on bid %d: "
+                            "%d queries -> %d unique chunks -> %d selected (%.1fK chars)",
+                            agent.name, bid_id, len(queries),
+                            len(scored_chunks), len(selected),
+                            total_chars / 1000,
+                        )
+                        return selected
+        except Exception as e:
+            logger.warning("Vector search failed for bid %d, falling back: %s", bid_id, e)
+
+    # Fallback: load all chunks from SQLite
+    return _load_doc_chunks(bid_id, document_ids)
+
+
 def _save_report(bid_id: int, report: AgentReport) -> int:
     """Save an agent report to the database (upsert)."""
     conn = get_connection()
@@ -176,7 +243,7 @@ def run_agent(bid_id: int, agent_name: str) -> AgentReport:
         raise ValueError(f"Unknown agent: {agent_name}. Available: {list(_AGENT_REGISTRY.keys())}")
 
     context = _load_bid_context(bid_id)
-    chunks = _load_doc_chunks(bid_id)
+    chunks = _load_doc_chunks_smart(bid_id, agent)
 
     logger.info("Running agent %s on bid %d (%d chunks)", agent_name, bid_id, len(chunks))
     report = agent.run(bid_id, chunks, context)
@@ -196,7 +263,6 @@ def run_all_agents(bid_id: int, agent_names: list[str] | None = None) -> dict:
     ]
 
     context = _load_bid_context(bid_id)
-    chunks = _load_doc_chunks(bid_id)
 
     results = {}
     for name in names:
@@ -205,6 +271,8 @@ def run_all_agents(bid_id: int, agent_names: list[str] | None = None) -> dict:
             results[name] = {"status": "error", "error": f"Unknown agent: {name}"}
             continue
 
+        # Each agent gets its own chunk selection (vector search is domain-specific)
+        chunks = _load_doc_chunks_smart(bid_id, agent)
         logger.info("Running agent %s on bid %d (%d chunks)", name, bid_id, len(chunks))
         report = agent.run(bid_id, chunks, context)
         _save_report(bid_id, report)
@@ -222,7 +290,7 @@ def run_all_agents(bid_id: int, agent_names: list[str] | None = None) -> dict:
         chief = _AGENT_REGISTRY.get("chief_estimator")
         if chief:
             logger.info("Running chief_estimator aggregation for bid %d", bid_id)
-            report = chief.run(bid_id, chunks, context)
+            report = chief.run(bid_id, [], context)  # Aggregator reads sub-agent reports, not chunks
             _save_report(bid_id, report)
             results["chief_estimator"] = {
                 "status": report.status,

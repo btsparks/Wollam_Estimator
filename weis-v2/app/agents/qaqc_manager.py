@@ -67,6 +67,19 @@ class QAQCManagerAgent(BaseAgent):
     version = "1.0"
     system_prompt = SYSTEM_PROMPT
 
+    def get_search_queries(self) -> list[str]:
+        return [
+            "testing requirements frequency",
+            "quality control quality assurance",
+            "submittals required",
+            "inspection requirements",
+            "certification requirements",
+            "concrete testing cylinder breaks",
+            "compaction testing",
+            "welding certification",
+            "material testing laboratory",
+        ]
+
     def _build_summary(self, report_json: dict) -> str:
         tests = len(report_json.get("testing_requirements", []))
         certs = len(report_json.get("certifications_required", []))

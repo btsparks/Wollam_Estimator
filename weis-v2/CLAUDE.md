@@ -33,10 +33,11 @@ weis-v2/
 │   │   ├── chat.py         # AI Chat endpoints
 │   │   ├── diary.py        # Diary import/synthesis endpoints
 │   │   ├── documents.py    # Document upload/enrichment endpoints
-│   │   └── settings.py     # Rate settings, import, and recast cost endpoints
+│   │   ├── settings.py     # Rate settings, import, and recast cost endpoints
+│   │   └── vector.py       # Vector search API (semantic search, index stats, rebuild)
 │   ├── agents/             # Bid intelligence agents (Layer 2)
-│   │   ├── base.py         # BaseAgent class + AgentReport dataclass
-│   │   ├── runner.py       # Agent execution engine + staleness tracking
+│   │   ├── base.py         # BaseAgent class + AgentReport + get_search_queries()
+│   │   ├── runner.py       # Agent execution engine + vector search + staleness tracking
 │   │   ├── document_control.py  # Document index, addendum changes, missing docs
 │   │   ├── legal_analyst.py     # Contract risk analysis (LDs, bonding, retainage)
 │   │   ├── qaqc_manager.py     # Testing, certifications, submittals, inspections
@@ -55,7 +56,8 @@ weis-v2/
 │   │   ├── rate_import.py  # Parse PayClass.txt + EquipmentSetup.txt from HeavyJob
 │   │   ├── rate_lookup.py  # Historical rate lookup for SOV items
 │   │   ├── cost_recalc.py  # Recast cost calculation engine (hours × current rates)
-│   │   └── bid_sync.py     # Dropbox-linked bid document sync (resolve folder, categorize, extract)
+│   │   ├── bid_sync.py     # Dropbox-linked bid document sync (resolve folder, categorize, extract)
+│   │   └── vector_store.py # ChromaDB vector store (embed, search, rebuild, institutional memory)
 │   ├── hcss/               # HCSS API integration (CARRIED OVER — working)
 │   │   ├── auth.py         # OAuth 2.0 client credentials
 │   │   ├── client.py       # Base HTTP client (pagination, retry, rate limiting)
@@ -79,7 +81,7 @@ weis-v2/
 │       └── weis.db         # SQLite database (schema v2.11, populated with HeavyJob + diary + rate data)
 ├── scripts/
 │   └── sync_everything.py  # HCSS sync script (CARRIED OVER — working)
-├── tests/                  # pytest tests (237 passing)
+├── tests/                  # pytest tests (257 passing)
 │   ├── test_interview.py   # Interview API tests
 │   ├── test_diary.py       # Diary parser + API tests
 │   ├── test_documents.py   # Document upload + extraction tests
@@ -133,6 +135,10 @@ weis-v2/
   - `chief_estimator.py` — Aggregates all sub-agent reports by SOV item
 - **`app/api/agents.py`** — Agent analysis + reports + intelligence status endpoints
 - **`scripts/sync_everything.py`** — Full HCSS data sync with adaptive concurrency
+
+- **`app/services/vector_store.py`** — ChromaDB vector store (semantic search, per-bid collections, institutional memory)
+- **`app/api/vector.py`** — Vector search API endpoints (search bids, search historical, index stats, rebuild)
+- **`scripts/backfill_vector_index.py`** — CLI tool to backfill vector index from SQLite
 
 ## What Needs To Be Built
 1. **AI Estimating Chat improvements** — see `docs/AI_CHAT.md`

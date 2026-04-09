@@ -34,5 +34,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 HCSS_CLIENT_ID = os.getenv("HCSS_CLIENT_ID", "")
 HCSS_CLIENT_SECRET = os.getenv("HCSS_CLIENT_SECRET", "")
 
+# ChromaDB vector store
+CHROMA_DIR = PROJECT_ROOT / "data" / "chromadb"
+VECTOR_SEARCH_ENABLED = os.getenv("WEIS_VECTOR_SEARCH_ENABLED", "true").lower() == "true"
+VECTOR_SEARCH_DEFAULT_RESULTS = int(os.getenv("WEIS_VECTOR_SEARCH_DEFAULT_RESULTS", "10"))
+
 # Logging
 LOG_LEVEL = os.getenv("WEIS_LOG_LEVEL", "INFO")

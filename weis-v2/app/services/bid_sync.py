@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.config import ESTIMATING_ROOT
+from app.config import ESTIMATING_ROOT, VECTOR_SEARCH_ENABLED
 from app.database import get_connection
 from app.services.document_extract import extract_text
 from app.services.document_chunker import chunk_document
@@ -254,11 +254,18 @@ def sync_bid_documents(bid_id: int, on_progress=None) -> dict:
                     )
                     conn.commit()
                     # Chunk the new document
+                    new_doc_id = cursor.lastrowid
                     if extraction_status == "complete":
                         try:
-                            chunk_document(cursor.lastrowid)
+                            chunk_document(new_doc_id)
                         except Exception as ce:
                             logger.warning("Chunking failed for %s: %s", fpath.name, ce)
+                        if VECTOR_SEARCH_ENABLED:
+                            try:
+                                from app.services.vector_store import embed_document_chunks
+                                embed_document_chunks(bid_id, new_doc_id)
+                            except Exception as ce:
+                                logger.warning("Embedding failed for %s: %s", fpath.name, ce)
                     counts["new"] += 1
                     if on_progress:
                         on_progress(current_file, total_files, fpath.name, "new")
@@ -314,6 +321,13 @@ def sync_bid_documents(bid_id: int, on_progress=None) -> dict:
                             chunk_document(existing["id"])
                         except Exception as ce:
                             logger.warning("Re-chunking failed for %s: %s", fpath.name, ce)
+                        if VECTOR_SEARCH_ENABLED:
+                            try:
+                                from app.services.vector_store import remove_document_embeddings, embed_document_chunks
+                                remove_document_embeddings(bid_id, existing["id"])
+                                embed_document_chunks(bid_id, existing["id"])
+                            except Exception as ce:
+                                logger.warning("Re-embedding failed for %s: %s", fpath.name, ce)
                     counts["updated"] += 1
                     if on_progress:
                         on_progress(current_file, total_files, fpath.name, "updated")

@@ -338,3 +338,45 @@ async def get_coverage():
 async def import_cost_reports():
     """Import actual costs from HeavyJob Cost Analysis report exports."""
     return import_all_cost_reports()
+
+
+# ── Vector Search Index ──────────────────────────────────────────
+
+@router.post("/rebuild-vector-index")
+async def rebuild_vector_index(bid_id: int | None = None):
+    """Rebuild ChromaDB vector index from SQLite.
+
+    If bid_id given, rebuild just that bid. Otherwise rebuild all bids
+    plus institutional memory.
+    """
+    from app.config import VECTOR_SEARCH_ENABLED
+    if not VECTOR_SEARCH_ENABLED:
+        raise HTTPException(status_code=400, detail="Vector search is disabled")
+
+    from app.services.vector_store import (
+        rebuild_bid_index,
+        rebuild_institutional_index,
+        get_index_stats,
+    )
+
+    if bid_id:
+        result = rebuild_bid_index(bid_id)
+        return {"bid_id": bid_id, **result}
+
+    # Rebuild all
+    conn = get_connection()
+    try:
+        bids = conn.execute("SELECT id FROM active_bids").fetchall()
+    finally:
+        conn.close()
+
+    results = {}
+    for bid in bids:
+        results[bid["id"]] = rebuild_bid_index(bid["id"])
+
+    institutional = rebuild_institutional_index()
+    return {
+        "bids": results,
+        "institutional": institutional,
+        "stats": get_index_stats(),
+    }

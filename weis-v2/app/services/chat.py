@@ -1083,11 +1083,68 @@ RESPONSE FORMAT:
 # Main Chat Entry Point
 # ─────────────────────────────────────────────────────────────
 
-def send_message(conversation_id: int | None, message: str) -> dict:
+HISTORICAL_TRIGGERS = [
+    "historically", "past projects", "how have we handled",
+    "previous bids", "on other projects", "in the past",
+]
+
+
+def _build_vector_context(bid_id: int, message: str) -> str:
+    """Build vector search context block for the system prompt.
+
+    Searches the bid's document collection, and optionally institutional
+    memory if the message contains historical triggers.
+    """
+    context_parts = []
+
+    try:
+        from app.services.vector_store import search_bid, search_institutional
+
+        # Bid document search
+        results = search_bid(bid_id, message, n_results=10)
+        if results:
+            lines = ["\n\n--- Relevant Bid Document Excerpts ---"]
+            for r in results:
+                header = f"\n[{r.get('filename', '?')}"
+                if r.get("section_heading"):
+                    header += f" | {r['section_heading']}"
+                header += "]"
+                lines.append(header)
+                lines.append(r.get("chunk_text", ""))
+            context_parts.append("\n".join(lines))
+
+        # Historical search (opt-in via trigger words)
+        msg_lower = message.lower()
+        if any(trigger in msg_lower for trigger in HISTORICAL_TRIGGERS):
+            hist_results = search_institutional(message, n_results=5)
+            if hist_results:
+                lines = ["\n\n--- Historical Project Context ---"]
+                for r in hist_results:
+                    meta = r.get("metadata", {})
+                    source = f"Job {meta.get('job_id', '?')} | {meta.get('source_type', '')}"
+                    lines.append(f"\n[{source}]")
+                    lines.append(r.get("chunk_text", ""))
+                context_parts.append("\n".join(lines))
+
+    except Exception as e:
+        logger.warning("Vector context build failed for bid %d: %s", bid_id, e)
+
+    if context_parts:
+        return ("\n\nThe user is currently reviewing an active bid. "
+                "Here are relevant excerpts from the bid documents and historical data. "
+                "Use these alongside SQL queries to provide comprehensive answers."
+                + "\n".join(context_parts))
+    return ""
+
+
+def send_message(conversation_id: int | None, message: str, bid_id: int | None = None) -> dict:
     """Main chat entry point — process a user message and return AI response.
 
     Uses Claude tool-use loop: Claude calls run_sql to query the database
     directly, then assembles a response from the results.
+
+    If bid_id is provided, vector search augments the system prompt with
+    relevant bid document excerpts.
 
     Returns dict with response, sources, conversation_id.
     """
@@ -1140,6 +1197,15 @@ def send_message(conversation_id: int | None, message: str) -> dict:
         prior_messages = history[:-1] if len(history) > 1 else []
         prior_messages = prior_messages[-10:]
 
+        # 3b. Vector search context — bid documents + optional historical
+        effective_system = SYSTEM_PROMPT
+        if bid_id:
+            from app.config import VECTOR_SEARCH_ENABLED
+            if VECTOR_SEARCH_ENABLED:
+                bid_context = _build_vector_context(bid_id, message)
+                if bid_context:
+                    effective_system += bid_context
+
         # 4. Build Claude API messages
         api_messages = []
         for msg in prior_messages:
@@ -1155,7 +1221,7 @@ def send_message(conversation_id: int | None, message: str) -> dict:
             response = client.messages.create(
                 model=MODEL,
                 max_tokens=4096,
-                system=SYSTEM_PROMPT,
+                system=effective_system,
                 tools=[TOOL_DEFINITION],
                 messages=api_messages,
             )

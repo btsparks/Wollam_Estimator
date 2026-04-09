@@ -59,6 +59,15 @@ class BaseAgent:
     version: str = "1.0"
     system_prompt: str = ""
 
+    def get_search_queries(self) -> list[str]:
+        """Return semantic search queries for this agent's domain.
+
+        Subclasses override to define domain-specific queries.
+        Returns empty list if the agent does not support vector search
+        (falls back to brute-force chunk loading).
+        """
+        return []
+
     def run(
         self,
         bid_id: int,

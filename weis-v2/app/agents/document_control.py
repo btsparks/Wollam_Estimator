@@ -54,6 +54,18 @@ class DocumentControlAgent(BaseAgent):
     version = "1.0"
     system_prompt = SYSTEM_PROMPT
 
+    def get_search_queries(self) -> list[str]:
+        return [
+            "table of contents",
+            "document index",
+            "addendum",
+            "revision log",
+            "drawing list",
+            "specification index",
+            "list of drawings",
+            "document register",
+        ]
+
     def _build_summary(self, report_json: dict) -> str:
         docs = report_json.get("documents_reviewed", 0)
         changes = len(report_json.get("addendum_changes", []))

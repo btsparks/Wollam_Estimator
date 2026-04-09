@@ -73,6 +73,21 @@ class LegalAnalystAgent(BaseAgent):
     version = "1.0"
     system_prompt = SYSTEM_PROMPT
 
+    def get_search_queries(self) -> list[str]:
+        return [
+            "liquidated damages",
+            "bonding requirements",
+            "performance bond payment bond",
+            "retainage",
+            "insurance requirements general liability",
+            "indemnification hold harmless",
+            "payment terms net days",
+            "warranty period",
+            "dispute resolution",
+            "termination clause",
+            "change order provisions",
+        ]
+
     def _build_summary(self, report_json: dict) -> str:
         bid_type = report_json.get("bid_type", "unknown")
         risks = report_json.get("key_risks", [])

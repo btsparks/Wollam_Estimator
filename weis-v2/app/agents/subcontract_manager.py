@@ -72,6 +72,20 @@ class SubcontractManagerAgent(BaseAgent):
     version = "1.0"
     system_prompt = SYSTEM_PROMPT
 
+    def get_search_queries(self) -> list[str]:
+        return [
+            "subcontractor requirements",
+            "specialty contractor",
+            "electrical scope conduit",
+            "mechanical equipment installation",
+            "plumbing HVAC",
+            "painting coatings",
+            "landscaping fencing",
+            "demolition",
+            "MBE WBE DBE diversity requirements",
+            "pre-qualification requirements",
+        ]
+
     def _build_summary(self, report_json: dict) -> str:
         sub_scopes = report_json.get("recommended_sub_scopes", [])
         self_perform = report_json.get("self_perform_recommended", [])
