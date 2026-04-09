@@ -314,21 +314,48 @@ def test_sync_idempotent(tmp_path):
 # ── API Endpoint Tests ──────────────────────────────────────────
 
 
+def test_browse_folders(tmp_path):
+    """GET /browse-folders lists available Dropbox estimating folders."""
+    (tmp_path / "26-04-2600 Project Alpha").mkdir()
+    (tmp_path / "26-04-2601 Project Beta").mkdir()
+    (tmp_path / ".hidden").mkdir()
+
+    with patch("app.api.bidding.ESTIMATING_ROOT", tmp_path):
+        res = client.get("/api/bidding/browse-folders")
+
+    assert res.status_code == 200
+    data = res.json()
+    names = [f["name"] for f in data["folders"]]
+    assert "26-04-2600 Project Alpha" in names
+    assert "26-04-2601 Project Beta" in names
+    assert ".hidden" not in names
+
+
+def test_browse_folders_with_filter(tmp_path):
+    """GET /browse-folders filters by query string."""
+    (tmp_path / "26-04-2600 Project Alpha").mkdir()
+    (tmp_path / "26-04-2601 Project Beta").mkdir()
+
+    with patch("app.api.bidding.ESTIMATING_ROOT", tmp_path):
+        res = client.get("/api/bidding/browse-folders?q=Alpha")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert len(data["folders"]) == 1
+    assert data["folders"][0]["name"] == "26-04-2600 Project Alpha"
+
+
 def test_link_folder_endpoint(tmp_path):
-    """POST /bids/{id}/link-folder resolves folder."""
-    (tmp_path / "9999 - Link Test").mkdir()
+    """POST /bids/{id}/link-folder links folder by explicit path."""
+    folder = tmp_path / "9999 - Link Test"
+    folder.mkdir()
 
     bid = create_test_bid(bid_number="9999")
 
-    with patch("app.services.bid_sync.ESTIMATING_ROOT", tmp_path), \
-         patch("app.api.bidding.resolve_bid_folder", wraps=resolve_bid_folder) as mock_resolve:
-        # Patch at the service level so it uses tmp_path
-        mock_resolve.side_effect = lambda n: resolve_bid_folder.__wrapped__(n) if hasattr(resolve_bid_folder, '__wrapped__') else resolve_bid_folder(n)
-
-        # Use direct service call via API
-        with patch("app.api.bidding.resolve_bid_folder") as api_mock:
-            api_mock.return_value = tmp_path / "9999 - Link Test"
-            res = client.post(f"/api/bidding/bids/{bid['id']}/link-folder", json={})
+    res = client.post(
+        f"/api/bidding/bids/{bid['id']}/link-folder",
+        json={"folder_path": str(folder)},
+    )
 
     assert res.status_code == 200
     data = res.json()
@@ -337,11 +364,13 @@ def test_link_folder_endpoint(tmp_path):
 
 
 def test_link_folder_not_found():
-    """POST /bids/{id}/link-folder returns linked=false when no match."""
+    """POST /bids/{id}/link-folder returns linked=false for non-existent path."""
     bid = create_test_bid(bid_number="0000")
 
-    with patch("app.api.bidding.resolve_bid_folder", return_value=None):
-        res = client.post(f"/api/bidding/bids/{bid['id']}/link-folder", json={})
+    res = client.post(
+        f"/api/bidding/bids/{bid['id']}/link-folder",
+        json={"folder_path": r"C:\nonexistent\folder"},
+    )
 
     assert res.status_code == 200
     data = res.json()
@@ -415,16 +444,16 @@ def test_sync_status_endpoint(tmp_path):
     assert data["document_counts"]["total"] == 2
 
 
-def test_create_bid_auto_links_folder(tmp_path):
-    """Creating a bid with bid_number auto-resolves Dropbox folder."""
-    (tmp_path / "8888 - Auto Link Test").mkdir()
+def test_create_bid_with_folder_path(tmp_path):
+    """Creating a bid with dropbox_folder_path links the folder directly."""
+    folder = tmp_path / "8888 - Manual Link Test"
+    folder.mkdir()
 
-    with patch("app.api.bidding.resolve_bid_folder") as mock:
-        mock.return_value = tmp_path / "8888 - Auto Link Test"
-        res = client.post("/api/bidding/bids", json={
-            "bid_name": "Auto Link Bid",
-            "bid_number": "8888",
-        })
+    res = client.post("/api/bidding/bids", json={
+        "bid_name": "Manual Link Bid",
+        "bid_number": "8888",
+        "dropbox_folder_path": str(folder),
+    })
 
     assert res.status_code == 200
     bid = res.json()

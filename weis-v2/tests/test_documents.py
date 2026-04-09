@@ -43,7 +43,7 @@ class TestTextExtraction:
 
     def test_extract_unsupported_type(self, tmp_path):
         """Unsupported file types raise ValueError."""
-        f = tmp_path / "test.docx"
+        f = tmp_path / "test.pptx"
         f.write_bytes(b"fake content")
         with pytest.raises(ValueError, match="Unsupported"):
             extract_text(f)

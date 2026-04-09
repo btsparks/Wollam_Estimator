@@ -2583,49 +2583,55 @@ function showNewBidModal() {
     const modal = document.getElementById('newBidModal');
     modal.style.display = 'flex';
     state._newBidFiles = [];
+    state._selectedFolder = null;
     document.getElementById('newBidForm').innerHTML = `
         <div style="display:flex;flex-direction:column;gap:12px;">
-            <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Estimate Number *</label>
-                <input type="text" id="nb_number" class="search-input" style="width:100%;" placeholder="e.g. 2574" oninput="lookupBidFolder(this.value)">
-                <div id="nb_folder_status" style="font-size:12px;margin-top:4px;"></div></div>
+            <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Name *</label>
+                <input type="text" id="nb_name" class="search-input" style="width:100%;" placeholder="e.g. Bonanza Power Plant Piping"></div>
 
-            <div id="nb_extra_fields" style="display:none;flex-direction:column;gap:12px;">
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Name</label>
-                    <input type="text" id="nb_name" class="search-input" style="width:100%;" placeholder="Auto-filled from Dropbox folder"></div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                    <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Owner / GC</label>
-                        <input type="text" id="nb_owner" class="search-input" style="width:100%;" placeholder="Who issued the RFP?"></div>
-                    <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Due Date</label>
-                        <input type="date" id="nb_date" class="search-input" style="width:100%;"></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Estimate Number</label>
+                    <input type="text" id="nb_number" class="search-input" style="width:100%;" placeholder="e.g. 2574"></div>
+                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Owner / GC</label>
+                    <input type="text" id="nb_owner" class="search-input" style="width:100%;" placeholder="Who issued the RFP?"></div>
+            </div>
+
+            <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Due Date</label>
+                <input type="date" id="nb_date" class="search-input" style="width:200px;"></div>
+
+            <!-- Dropbox Folder Picker -->
+            <div>
+                <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Dropbox Estimating Folder</label>
+                <div id="nb_folder_selected" style="margin-bottom:6px;"></div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <button type="button" class="btn btn-sm" onclick="openFolderBrowser('newBid')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        Browse Folders
+                    </button>
+                    <span style="font-size:11px;color:var(--text-tertiary);">or</span>
+                    <input type="text" id="nb_folder_path" class="search-input" style="flex:1;font-size:12px;" placeholder="Paste folder path" onchange="manualFolderPath(this.value)">
                 </div>
             </div>
 
-            <!-- Manual fallback — only if no folder found -->
-            <div id="nb_manual_section" style="display:none;">
-                <div style="margin-bottom:12px;">
-                    <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Name *</label>
-                    <input type="text" id="nb_name_manual" class="search-input" style="width:100%;" placeholder="e.g. Bonanza Power Plant Piping">
+            <!-- Manual file upload -->
+            <details>
+                <summary style="font-size:12px;color:var(--text-tertiary);cursor:pointer;margin-bottom:8px;">Upload RFP files manually</summary>
+                <div id="nbDropZone" style="border:2px dashed var(--border-strong);border-radius:8px;padding:24px;text-align:center;cursor:pointer;background:var(--bg-hover);transition:border-color 0.15s;"
+                     onclick="document.getElementById('nbFileInput').click()"
+                     ondragover="event.preventDefault();this.style.borderColor='var(--wollam-navy)';"
+                     ondragleave="this.style.borderColor='var(--border-strong)';"
+                     ondrop="handleNewBidDrop(event)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <p style="margin:0;font-size:13px;color:var(--text-secondary);">Drag & drop RFP files here, or click to browse</p>
+                    <p style="margin:4px 0 0;font-size:11px;color:var(--text-tertiary);">PDF, Excel, Word, CSV, TXT</p>
                 </div>
-
-                <details>
-                    <summary style="font-size:12px;color:var(--text-tertiary);cursor:pointer;margin-bottom:8px;">Upload RFP files manually</summary>
-                    <div id="nbDropZone" style="border:2px dashed var(--border-strong);border-radius:8px;padding:24px;text-align:center;cursor:pointer;background:var(--bg-hover);transition:border-color 0.15s;"
-                         onclick="document.getElementById('nbFileInput').click()"
-                         ondragover="event.preventDefault();this.style.borderColor='var(--wollam-navy)';"
-                         ondragleave="this.style.borderColor='var(--border-strong)';"
-                         ondrop="handleNewBidDrop(event)">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        <p style="margin:0;font-size:13px;color:var(--text-secondary);">Drag & drop RFP files here, or click to browse</p>
-                        <p style="margin:4px 0 0;font-size:11px;color:var(--text-tertiary);">PDF, Excel, Word, CSV, TXT</p>
-                    </div>
-                    <input type="file" id="nbFileInput" style="display:none;" multiple accept=".pdf,.xlsx,.xls,.csv,.txt,.docx,.doc" onchange="handleNewBidFiles(this.files)">
-                    <div id="nbFileList" style="margin-top:8px;"></div>
-                </details>
-            </div>
+                <input type="file" id="nbFileInput" style="display:none;" multiple accept=".pdf,.xlsx,.xls,.csv,.txt,.docx,.doc" onchange="handleNewBidFiles(this.files)">
+                <div id="nbFileList" style="margin-top:8px;"></div>
+            </details>
 
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
                 <button class="btn btn-sm" onclick="closeNewBidModal()">Cancel</button>
-                <button class="btn btn-primary btn-sm" id="nbCreateBtn" onclick="createBid()" disabled>Create Bid</button>
+                <button class="btn btn-primary btn-sm" id="nbCreateBtn" onclick="createBid()">Create Bid</button>
             </div>
         </div>
     `;
@@ -2662,50 +2668,71 @@ function renderNewBidFileList() {
     `).join('');
 }
 
-let _bidLookupTimer = null;
-function lookupBidFolder(value) {
-    clearTimeout(_bidLookupTimer);
-    const status = document.getElementById('nb_folder_status');
-    const extraFields = document.getElementById('nb_extra_fields');
-    const manualSection = document.getElementById('nb_manual_section');
-    const createBtn = document.getElementById('nbCreateBtn');
-    const val = value.trim();
+// ── Native Folder Picker (server-side tkinter dialog) ──
 
-    if (!val || val.length < 3) {
-        status.innerHTML = '';
-        extraFields.style.display = 'none';
-        manualSection.style.display = 'none';
-        createBtn.disabled = true;
-        return;
-    }
+let _folderPickerContext = null; // 'newBid' or bidId (number)
 
-    status.innerHTML = '<span style="color:var(--text-tertiary);">Looking up folder...</span>';
+async function openFolderBrowser(context) {
+    _folderPickerContext = context;
 
-    _bidLookupTimer = setTimeout(async () => {
-        try {
-            const res = await fetch('/api/bidding/resolve-folder?' + new URLSearchParams({ bid_number: val }));
-            const data = await res.json();
-            if (data.found) {
-                const folderName = data.folder_name;
-                // Extract project name — strip "YY-MM-NNNN " prefix
-                const projectName = folderName.replace(/^\d{2}-\d{2}-\d{4}\s*/, '');
-                status.innerHTML = `<span style="color:var(--success-green);display:flex;align-items:center;gap:4px;">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                    Found: ${escHtml(folderName)}</span>`;
-                extraFields.style.display = 'flex';
-                manualSection.style.display = 'none';
-                document.getElementById('nb_name').value = projectName;
-                createBtn.disabled = false;
-            } else {
-                status.innerHTML = '<span style="color:var(--text-tertiary);">No Dropbox folder found — enter bid details manually</span>';
-                extraFields.style.display = 'none';
-                manualSection.style.display = 'block';
-                createBtn.disabled = false;
+    try {
+        const res = await fetch('/api/bidding/pick-folder', { method: 'POST' });
+        const data = await res.json();
+
+        if (!data.picked) return; // User cancelled or error
+
+        if (_folderPickerContext === 'newBid') {
+            state._selectedFolder = data.path;
+            const selected = document.getElementById('nb_folder_selected');
+            selected.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg-hover);border-radius:6px;border:1px solid var(--border-default);">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success-green)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span style="font-size:13px;color:var(--text-primary);flex:1;">${escHtml(data.name)}</span>
+                <button onclick="clearBidFolder()" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:12px;padding:0 2px;">&#x2715;</button>
+            </div>`;
+            // Clear the paste input if it exists
+            const pathInput = document.getElementById('nb_folder_path');
+            if (pathInput) pathInput.value = '';
+
+            // Auto-fill bid name if empty
+            const nameEl = document.getElementById('nb_name');
+            if (nameEl && !nameEl.value.trim()) {
+                const projectName = data.name.replace(/^\d{2}-\d{2}-\d{4}\s*/, '');
+                nameEl.value = projectName;
             }
-        } catch (err) {
-            status.innerHTML = `<span style="color:var(--danger-red);">Lookup error: ${escHtml(err.message)}</span>`;
+        } else if (typeof _folderPickerContext === 'number') {
+            selectDetailFolder(_folderPickerContext, data.path);
         }
-    }, 400);
+    } catch (err) {
+        console.warn('Folder picker error:', err);
+    }
+}
+
+function clearBidFolder() {
+    state._selectedFolder = null;
+    const selected = document.getElementById('nb_folder_selected');
+    if (selected) selected.innerHTML = '';
+    const pathInput = document.getElementById('nb_folder_path');
+    if (pathInput) pathInput.value = '';
+}
+
+function manualFolderPath(value) {
+    const path = value.trim().replace(/^["']+|["']+$/g, '');
+    if (!path) { clearBidFolder(); return; }
+    state._selectedFolder = path;
+    const name = path.split(/[/\\]/).filter(Boolean).pop() || path;
+    const selected = document.getElementById('nb_folder_selected');
+    selected.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg-hover);border-radius:6px;border:1px solid var(--border-default);">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success-green)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span style="font-size:13px;color:var(--text-primary);flex:1;">${escHtml(name)}</span>
+        <button onclick="clearBidFolder()" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:12px;padding:0 2px;">&#x2715;</button>
+    </div>`;
+
+    // Auto-fill bid name if empty
+    const nameEl = document.getElementById('nb_name');
+    if (nameEl && !nameEl.value.trim()) {
+        const projectName = name.replace(/^\d{2}-\d{2}-\d{4}\s*/, '');
+        nameEl.value = projectName;
+    }
 }
 
 function closeNewBidModal() {
@@ -2713,65 +2740,156 @@ function closeNewBidModal() {
     state._newBidFiles = [];
 }
 
+async function streamSync(bidId) {
+    return new Promise((resolve, reject) => {
+        const detail = document.getElementById('step_sync_detail');
+        const evtSource = new EventSource(`/api/bidding/bids/${bidId}/sync-stream`);
+
+        evtSource.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'progress') {
+                    if (detail) detail.textContent = `${msg.current} of ${msg.total}: ${msg.filename}`;
+                } else if (msg.type === 'done') {
+                    evtSource.close();
+                    resolve(msg.result);
+                } else if (msg.type === 'error') {
+                    evtSource.close();
+                    reject(new Error(msg.message));
+                }
+            } catch (e) {
+                // ignore parse errors
+            }
+        };
+
+        evtSource.onerror = () => {
+            evtSource.close();
+            reject(new Error('Sync stream connection lost'));
+        };
+    });
+}
+
 async function createBid() {
     const bidNumber = document.getElementById('nb_number').value.trim();
-    // Name from Dropbox path or manual entry
-    const nameEl = document.getElementById('nb_name');
-    const nameManualEl = document.getElementById('nb_name_manual');
-    const name = (nameEl && nameEl.value.trim()) || (nameManualEl && nameManualEl.value.trim()) || '';
+    const name = document.getElementById('nb_name').value.trim();
     if (!name) { alert('Bid name is required'); return; }
 
-    const btn = document.getElementById('nbCreateBtn');
+    const hasFolder = !!state._selectedFolder;
     const fileCount = state._newBidFiles.length;
-    btn.textContent = 'Creating...';
-    btn.disabled = true;
+
+    // Replace form with progress panel
+    const form = document.getElementById('newBidForm');
+    form.innerHTML = `
+        <div style="min-width:360px;">
+            <h3 style="margin:0 0 16px;font-size:15px;color:var(--text-primary);">Setting up ${escHtml(name)}</h3>
+            <div id="progressSteps" style="display:flex;flex-direction:column;gap:10px;"></div>
+        </div>
+    `;
+
+    const steps = document.getElementById('progressSteps');
+    function addStep(id, label) {
+        steps.innerHTML += `
+            <div id="step_${id}" style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;background:var(--bg-hover);transition:all 0.3s;">
+                <div id="step_${id}_icon" style="width:20px;height:20px;display:flex;align-items:center;justify-content:center;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" style="animation:spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                </div>
+                <div style="flex:1;">
+                    <div style="font-size:13px;font-weight:500;color:var(--text-primary);">${label}</div>
+                    <div id="step_${id}_detail" style="font-size:11px;color:var(--text-tertiary);margin-top:2px;"></div>
+                </div>
+            </div>
+        `;
+    }
+    function completeStep(id, detail) {
+        const icon = document.getElementById(`step_${id}_icon`);
+        if (icon) icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success-green)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`;
+        const det = document.getElementById(`step_${id}_detail`);
+        if (det && detail) det.textContent = detail;
+    }
+    function failStep(id, detail) {
+        const icon = document.getElementById(`step_${id}_icon`);
+        if (icon) icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger-red)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+        const det = document.getElementById(`step_${id}_detail`);
+        if (det && detail) det.textContent = detail;
+    }
 
     try {
-        const ownerEl = document.getElementById('nb_owner');
-        const dateEl = document.getElementById('nb_date');
-
+        // Step 1: Create bid
+        addStep('create', 'Creating bid');
         const bid = await api('/bidding/bids', {
             method: 'POST',
             body: JSON.stringify({
                 bid_name: name,
                 bid_number: bidNumber || null,
-                owner: ownerEl ? ownerEl.value.trim() || null : null,
-                bid_date: dateEl ? dateEl.value || null : null,
+                owner: document.getElementById('nb_owner')?.value.trim() || null,
+                bid_date: document.getElementById('nb_date')?.value || null,
+                dropbox_folder_path: state._selectedFolder || null,
             }),
         });
+        completeStep('create', `Bid #${bid.id} created`);
 
-        // If folder was linked, auto-sync
+        // Step 2: Sync documents from Dropbox (streaming progress)
         if (bid.dropbox_folder_path) {
-            btn.textContent = 'Syncing documents...';
+            addStep('sync', 'Syncing documents from Dropbox');
             try {
-                await api(`/bidding/bids/${bid.id}/sync`, { method: 'POST' });
+                const syncResult = await streamSync(bid.id);
+                const parts = [];
+                if (syncResult.new) parts.push(`${syncResult.new} new`);
+                if (syncResult.updated) parts.push(`${syncResult.updated} updated`);
+                if (syncResult.unchanged) parts.push(`${syncResult.unchanged} unchanged`);
+                if (syncResult.errors?.length) parts.push(`${syncResult.errors.length} errors`);
+                completeStep('sync', parts.join(', ') || 'No documents found');
             } catch (e) {
-                console.warn('Auto-sync failed:', e);
+                failStep('sync', e.message || 'Sync failed');
             }
         }
 
-        // Upload manual files if any
+        // Step 3: Upload manual files
         if (fileCount) {
+            addStep('upload', `Uploading ${fileCount} file${fileCount > 1 ? 's' : ''}`);
             for (let i = 0; i < state._newBidFiles.length; i++) {
-                btn.textContent = `Uploading ${i + 1} of ${fileCount}...`;
+                const det = document.getElementById('step_upload_detail');
+                if (det) det.textContent = `${i + 1} of ${fileCount}: ${state._newBidFiles[i].name}`;
                 const formData = new FormData();
                 formData.append('file', state._newBidFiles[i]);
                 formData.append('addendum_number', '0');
                 formData.append('doc_category', 'general');
                 formData.append('date_received', new Date().toISOString().split('T')[0]);
-                await fetch(`/api/bidding/bids/${bid.id}/documents`, {
-                    method: 'POST',
-                    body: formData,
-                });
+                await fetch(`/api/bidding/bids/${bid.id}/documents`, { method: 'POST', body: formData });
+            }
+            completeStep('upload', `${fileCount} file${fileCount > 1 ? 's' : ''} uploaded`);
+        }
+
+        // Step 4: AI analysis
+        if (bid.dropbox_folder_path || fileCount) {
+            addStep('ai', 'AI analyzing documents for project details');
+            try {
+                const analysis = await api(`/bidding/bids/${bid.id}/analyze-overview`, { method: 'POST' });
+                if (analysis.analyzed && analysis.fields_populated?.length) {
+                    completeStep('ai', `Populated: ${analysis.fields_populated.join(', ')}`);
+                } else {
+                    completeStep('ai', analysis.message || 'No fields could be extracted');
+                }
+            } catch (e) {
+                failStep('ai', e.message || 'Analysis failed');
             }
         }
 
-        closeNewBidModal();
-        navigate('bidding', bid.id);
+        // Done — navigate after a brief pause so user can see results
+        addStep('done', 'Ready');
+        completeStep('done', 'Opening bid...');
+        setTimeout(() => {
+            closeNewBidModal();
+            navigate('bidding', bid.id);
+        }, 1200);
+
     } catch (err) {
-        btn.textContent = 'Create Bid';
-        btn.disabled = false;
-        alert('Error creating bid: ' + err.message);
+        failStep('create', err.message);
+        steps.innerHTML += `
+            <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
+                <button class="btn btn-sm" onclick="closeNewBidModal()">Close</button>
+            </div>
+        `;
     }
 }
 
@@ -2890,12 +3008,13 @@ function renderBidOverview(bid) {
                         <span style="font-size:13px;color:var(--text-primary);" title="${escAttr(bid.dropbox_folder_path)}">${escHtml(bid.dropbox_folder_path.split('\\\\').slice(-2).join('/'))}</span>
                         <span style="font-size:11px;color:var(--text-tertiary);">${bid.sync_status === 'complete' ? 'Linked' : bid.sync_status || 'never'}</span>
                     </div>`
-                    : bid.bid_number
-                        ? `<div style="display:flex;align-items:center;gap:8px;">
-                            <span style="font-size:13px;color:var(--text-tertiary);">No Dropbox folder linked</span>
-                            <button class="btn btn-sm" id="linkFolderBtn" onclick="linkBidFolder(${bid.id})">Link Folder</button>
-                        </div>`
-                        : `<span style="font-size:13px;color:var(--text-tertiary);">Enter a bid number to link a Dropbox folder</span>`
+                    : `<div id="linkFolderContainer">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-sm" onclick="linkBidFolder(${bid.id})">Browse Folders</button>
+                            <span style="font-size:11px;color:var(--text-tertiary);">or</span>
+                            <input type="text" id="detail_folder_path" class="search-input" style="flex:1;min-width:200px;font-size:12px;" placeholder="Paste folder path" onchange="linkBidFolderByPath(${bid.id}, this.value)">
+                        </div>
+                    </div>`
                 }
             </div>
 
@@ -3541,16 +3660,34 @@ async function syncFromDropbox(bidId) {
     const resultDiv = document.getElementById('syncResult');
     btn.disabled = true;
     btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Syncing...`;
+    resultDiv.innerHTML = '<span style="font-size:12px;color:var(--text-tertiary);">Starting...</span>';
 
     try {
-        const result = await api(`/bidding/bids/${bidId}/sync`, { method: 'POST' });
+        const result = await new Promise((resolve, reject) => {
+            const evtSource = new EventSource(`/api/bidding/bids/${bidId}/sync-stream`);
+            evtSource.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'progress') {
+                        resultDiv.innerHTML = `<span style="font-size:12px;color:var(--text-secondary);">${msg.current} of ${msg.total}: ${escHtml(msg.filename)}</span>`;
+                    } else if (msg.type === 'done') {
+                        evtSource.close();
+                        resolve(msg.result);
+                    } else if (msg.type === 'error') {
+                        evtSource.close();
+                        reject(new Error(msg.message));
+                    }
+                } catch (e) {}
+            };
+            evtSource.onerror = () => { evtSource.close(); reject(new Error('Sync stream lost')); };
+        });
+
         const parts = [];
         if (result.new) parts.push(`${result.new} new`);
         if (result.updated) parts.push(`${result.updated} updated`);
         if (result.unchanged) parts.push(`${result.unchanged} unchanged`);
         if (result.removed) parts.push(`${result.removed} removed`);
         resultDiv.innerHTML = `<span style="font-size:12px;color:var(--success-green);font-weight:500;">Synced: ${parts.join(', ') || '0 files'}</span>`;
-        // Refresh documents list
         setTimeout(() => loadBidDetail(bidId), 1500);
     } catch (err) {
         resultDiv.innerHTML = `<span style="font-size:12px;color:var(--danger-red);">Sync failed: ${escHtml(err.message)}</span>`;
@@ -3559,23 +3696,40 @@ async function syncFromDropbox(bidId) {
     }
 }
 
-async function linkBidFolder(bidId) {
-    const btn = document.getElementById('linkFolderBtn');
-    btn.disabled = true;
-    btn.textContent = 'Linking...';
+function linkBidFolder(bidId) {
+    openFolderBrowser(bidId);  // Opens native OS folder picker
+}
 
+async function linkBidFolderByPath(bidId, value) {
+    const path = value.trim();
+    if (!path) return;
     try {
-        const result = await api(`/bidding/bids/${bidId}/link-folder`, { method: 'POST', body: JSON.stringify({}) });
+        const result = await api(`/bidding/bids/${bidId}/link-folder`, {
+            method: 'POST',
+            body: JSON.stringify({ folder_path: path }),
+        });
         if (result.linked) {
             loadBidDetail(bidId);
         } else {
-            btn.disabled = false;
-            btn.textContent = 'Link Folder';
-            alert(result.message || 'No matching Dropbox folder found.');
+            alert(result.message || 'Failed to link folder.');
         }
     } catch (err) {
-        btn.disabled = false;
-        btn.textContent = 'Link Folder';
+        alert('Error linking folder: ' + err.message);
+    }
+}
+
+async function selectDetailFolder(bidId, folderPath) {
+    try {
+        const result = await api(`/bidding/bids/${bidId}/link-folder`, {
+            method: 'POST',
+            body: JSON.stringify({ folder_path: folderPath }),
+        });
+        if (result.linked) {
+            loadBidDetail(bidId);
+        } else {
+            alert(result.message || 'Failed to link folder.');
+        }
+    } catch (err) {
         alert('Error linking folder: ' + err.message);
     }
 }

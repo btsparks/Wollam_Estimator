@@ -33,6 +33,8 @@ def extract_text(filepath: Path) -> str:
         return _extract_csv(filepath)
     elif suffix in (".txt", ".text", ".md"):
         return _extract_text(filepath)
+    elif suffix in (".docx", ".doc"):
+        return _extract_docx(filepath)
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
 
@@ -101,6 +103,36 @@ def _extract_text(filepath: Path) -> str:
     """Extract text from plain text file."""
     text = filepath.read_text(encoding="utf-8", errors="replace")
     return text[:MAX_TEXT_LENGTH]
+
+
+def _extract_docx(filepath: Path) -> str:
+    """Extract text from Word .docx files using python-docx.
+
+    Note: .doc (old binary format) is not supported by python-docx.
+    We attempt it anyway — it will fail gracefully for true .doc files.
+    """
+    import docx
+
+    try:
+        doc = docx.Document(filepath)
+    except Exception:
+        raise ValueError(f"Could not read Word file (may be old .doc format): {filepath.name}")
+
+    paragraphs = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            paragraphs.append(text)
+
+    # Also extract text from tables
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                paragraphs.append("\t".join(cells))
+
+    result = "\n".join(paragraphs)
+    return result[:MAX_TEXT_LENGTH]
 
 
 def _format_table(table: list[list]) -> str:

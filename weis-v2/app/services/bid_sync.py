@@ -87,11 +87,50 @@ def categorize_bid_file(rel_path: str, file_name: str) -> tuple[str, int]:
     return "general", addendum_number
 
 
-def sync_bid_documents(bid_id: int) -> dict:
+def discover_bid_files(bid_id: int) -> list[dict]:
+    """Walk a bid's Dropbox folder and return the list of eligible files without processing.
+
+    Returns list of dicts with: path, name, size, category.
+    """
+    conn = get_connection()
+    try:
+        bid = conn.execute(
+            "SELECT dropbox_folder_path FROM active_bids WHERE id = ?", (bid_id,),
+        ).fetchone()
+        if not bid or not bid["dropbox_folder_path"]:
+            return []
+
+        folder = Path(bid["dropbox_folder_path"])
+        if not folder.exists():
+            return []
+
+        files = []
+        for fpath in folder.rglob("*"):
+            if not fpath.is_file():
+                continue
+            if fpath.suffix.lower() not in ALLOWED_EXTENSIONS:
+                continue
+            rel_path = str(fpath.relative_to(folder))
+            cat, addendum = categorize_bid_file(rel_path, fpath.name)
+            files.append({
+                "path": str(fpath),
+                "name": fpath.name,
+                "size": fpath.stat().st_size,
+                "category": cat,
+            })
+        return files
+    finally:
+        conn.close()
+
+
+def sync_bid_documents(bid_id: int, on_progress=None) -> dict:
     """Sync documents from a bid's linked Dropbox folder.
 
     Walks the folder, discovers/categorizes/extracts documents,
     and tracks changes (new, updated, unchanged, removed).
+
+    Args:
+        on_progress: Optional callback(current, total, filename, action) called per file.
 
     Returns dict with counts: new, updated, unchanged, removed, total, errors.
     """
@@ -125,14 +164,18 @@ def sync_bid_documents(bid_id: int) -> dict:
         # Track which dropbox_paths we see during this scan
         seen_paths = set()
 
-        # Walk the folder
-        for fpath in folder.rglob("*"):
-            if not fpath.is_file():
-                continue
+        # Discover all eligible files first (for progress tracking)
+        all_files = [
+            fpath for fpath in folder.rglob("*")
+            if fpath.is_file() and fpath.suffix.lower() in ALLOWED_EXTENSIONS
+        ]
+        total_files = len(all_files)
+        current_file = 0
 
+        # Process each file
+        for fpath in all_files:
             suffix = fpath.suffix.lower()
-            if suffix not in ALLOWED_EXTENSIONS:
-                continue
+            current_file += 1
 
             dropbox_path = str(fpath)
             seen_paths.add(dropbox_path)
@@ -172,6 +215,8 @@ def sync_bid_documents(bid_id: int) -> dict:
                              manual_dup["id"]),
                         )
                         counts["unchanged"] += 1
+                        if on_progress:
+                            on_progress(current_file, total_files, fpath.name, "unchanged")
                         continue
 
                 if existing is None:
@@ -215,6 +260,8 @@ def sync_bid_documents(bid_id: int) -> dict:
                         except Exception as ce:
                             logger.warning("Chunking failed for %s: %s", fpath.name, ce)
                     counts["new"] += 1
+                    if on_progress:
+                        on_progress(current_file, total_files, fpath.name, "new")
 
                 elif existing["file_hash"] != file_hash:
                     # File changed — save previous text for diffing, then re-extract
@@ -268,6 +315,8 @@ def sync_bid_documents(bid_id: int) -> dict:
                         except Exception as ce:
                             logger.warning("Re-chunking failed for %s: %s", fpath.name, ce)
                     counts["updated"] += 1
+                    if on_progress:
+                        on_progress(current_file, total_files, fpath.name, "updated")
 
                 else:
                     # Unchanged
@@ -276,6 +325,8 @@ def sync_bid_documents(bid_id: int) -> dict:
                         (existing["id"],),
                     )
                     counts["unchanged"] += 1
+                    if on_progress:
+                        on_progress(current_file, total_files, fpath.name, "unchanged")
 
             except Exception as e:
                 errors.append({"file": fpath.name, "error": str(e)})

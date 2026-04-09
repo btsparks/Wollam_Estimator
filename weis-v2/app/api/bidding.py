@@ -13,13 +13,14 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.config import BID_DOCUMENTS_DIR
+from app.config import BID_DOCUMENTS_DIR, ESTIMATING_ROOT, DROPBOX_ROOT, ANTHROPIC_API_KEY
 from app.database import get_connection
 from app.services.document_extract import extract_text
 from app.services.sov_parser import parse_sov_file
-from app.services.bid_sync import resolve_bid_folder, sync_bid_documents
+from app.services.bid_sync import resolve_bid_folder, sync_bid_documents, discover_bid_files
 from app.services.document_chunker import chunk_document, chunk_all_bid_documents
 from app.services.rate_lookup import lookup_rates_for_sov_item, auto_populate_sov_rates
 
@@ -52,6 +53,7 @@ class BidCreate(BaseModel):
     contact_email: Optional[str] = None
     status: Optional[str] = "active"
     notes: Optional[str] = None
+    dropbox_folder_path: Optional[str] = None
 
 
 class BidUpdate(BaseModel):
@@ -162,6 +164,27 @@ async def create_bid(bid: BidCreate):
     """Create a new bid project."""
     conn = get_connection()
     try:
+        # Auto-generate bid number if not provided: YY-MM-NNNN
+        bid_number = bid.bid_number
+        if not bid_number:
+            now = datetime.now()
+            prefix = now.strftime("%y-%m")
+            # Find the highest sequential number across all bids
+            row = conn.execute(
+                """SELECT bid_number FROM active_bids
+                   WHERE bid_number LIKE '%-%-____'
+                   ORDER BY CAST(SUBSTR(bid_number, 7) AS INTEGER) DESC
+                   LIMIT 1"""
+            ).fetchone()
+            if row and row["bid_number"]:
+                try:
+                    last_seq = int(row["bid_number"].split("-")[-1])
+                    bid_number = f"{prefix}-{last_seq + 1}"
+                except (ValueError, IndexError):
+                    bid_number = f"{prefix}-0001"
+            else:
+                bid_number = f"{prefix}-0001"
+
         cursor = conn.execute(
             """INSERT INTO active_bids
                (bid_name, bid_number, owner, general_contractor, bid_date, bid_due_time,
@@ -169,7 +192,7 @@ async def create_bid(bid: BidCreate):
                 contact_email, status, notes)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                bid.bid_name, bid.bid_number, bid.owner, bid.general_contractor,
+                bid.bid_name, bid_number, bid.owner, bid.general_contractor,
                 bid.bid_date, bid.bid_due_time, bid.project_type, bid.location,
                 bid.estimated_value, bid.description, bid.contact_name,
                 bid.contact_email, bid.status, bid.notes,
@@ -178,15 +201,14 @@ async def create_bid(bid: BidCreate):
         conn.commit()
         bid_id = cursor.lastrowid
 
-        # Auto-resolve Dropbox folder if bid_number provided
-        if bid.bid_number:
-            folder = resolve_bid_folder(bid.bid_number)
-            if folder:
-                conn.execute(
-                    "UPDATE active_bids SET dropbox_folder_path = ? WHERE id = ?",
-                    (str(folder), bid_id),
-                )
-                conn.commit()
+        # Link Dropbox folder if path provided by user
+        if bid.dropbox_folder_path:
+            clean_path = bid.dropbox_folder_path.strip().strip('"').strip("'")
+            conn.execute(
+                "UPDATE active_bids SET dropbox_folder_path = ? WHERE id = ?",
+                (clean_path, bid_id),
+            )
+            conn.commit()
 
         row = conn.execute("SELECT * FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
         return dict(row)
@@ -470,37 +492,127 @@ async def delete_document(doc_id: int):
         conn.close()
 
 
-# ── Dropbox Sync ────────────────────────────────────────────────
+# ── Dropbox Folder Selection ───────────────────────────────────
 
-@router.get("/resolve-folder")
-async def resolve_folder_preview(bid_number: str = Query(...)):
-    """Preview which Dropbox folder a bid number resolves to (no DB writes)."""
-    folder = resolve_bid_folder(bid_number)
-    if folder:
-        return {"found": True, "folder_path": str(folder), "folder_name": folder.name}
-    return {"found": False}
+@router.post("/pick-folder")
+async def pick_folder():
+    """Open a native OS folder picker dialog and return the selected path.
+
+    Runs tkinter in a separate subprocess so it can never block the server.
+    """
+    import subprocess
+    import sys
+
+    initial_dir = str(ESTIMATING_ROOT) if ESTIMATING_ROOT.exists() else str(DROPBOX_ROOT)
+
+    script = f"""
+import tkinter as tk
+from tkinter import filedialog
+root = tk.Tk()
+root.withdraw()
+root.attributes("-topmost", True)
+root.focus_force()
+folder = filedialog.askdirectory(title="Select Estimating Folder", initialdir=r"{initial_dir}")
+root.destroy()
+print(folder if folder else "")
+"""
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=120,
+        )
+        path = proc.stdout.strip()
+        if not path:
+            return {"picked": False, "message": "No folder selected"}
+
+        folder = Path(path)
+        return {"picked": True, "path": str(folder), "name": folder.name}
+    except subprocess.TimeoutExpired:
+        return {"picked": False, "message": "Folder picker timed out"}
+    except Exception as e:
+        return {"picked": False, "message": str(e)}
+
+
+@router.get("/browse-folders")
+async def browse_folders(q: str = Query(default="")):
+    """List available Dropbox estimating folders for manual selection.
+
+    Returns all subfolders in ESTIMATING_ROOT, optionally filtered by query string.
+    """
+    if not ESTIMATING_ROOT.exists():
+        return {"folders": [], "root": str(ESTIMATING_ROOT), "error": "Estimating root not found"}
+
+    folders = []
+    for entry in sorted(ESTIMATING_ROOT.iterdir()):
+        if entry.is_dir() and not entry.name.startswith("."):
+            folders.append({"name": entry.name, "path": str(entry)})
+
+    # Filter by query if provided
+    if q.strip():
+        query = q.strip().lower()
+        folders = [f for f in folders if query in f["name"].lower()]
+
+    return {"folders": folders, "root": str(ESTIMATING_ROOT)}
+
+
+class ResolveFolderName(BaseModel):
+    folder_name: str
+
+
+@router.post("/resolve-folder-name")
+async def resolve_folder_name(body: ResolveFolderName):
+    """Resolve a folder name (from native OS picker) to its full path.
+
+    Searches in order: ESTIMATING_ROOT, then DROPBOX_ROOT.
+    """
+    name = body.folder_name.strip()
+    if not name:
+        return {"found": False, "message": "No folder name provided"}
+
+    # Search ESTIMATING_ROOT first (Estimates - Shared), then DROPBOX_ROOT
+    search_roots = []
+    if ESTIMATING_ROOT.exists():
+        search_roots.append(ESTIMATING_ROOT)
+    if DROPBOX_ROOT.exists() and DROPBOX_ROOT != ESTIMATING_ROOT:
+        search_roots.append(DROPBOX_ROOT)
+
+    for root in search_roots:
+        # Exact match
+        target = root / name
+        if target.exists() and target.is_dir():
+            return {"found": True, "path": str(target), "name": name}
+
+        # Case-insensitive match
+        try:
+            for entry in root.iterdir():
+                if entry.is_dir() and entry.name.lower() == name.lower():
+                    return {"found": True, "path": str(entry), "name": entry.name}
+        except PermissionError:
+            continue
+
+    return {"found": False, "message": f"Folder '{name}' not found in Dropbox. You can paste the full folder path instead."}
 
 
 class LinkFolderRequest(BaseModel):
-    bid_number: Optional[str] = None
+    folder_path: Optional[str] = None
 
 
 @router.post("/bids/{bid_id}/link-folder")
-async def link_folder(bid_id: int, body: LinkFolderRequest = LinkFolderRequest()):
-    """Resolve and link a Dropbox estimating folder to a bid."""
+async def link_folder(bid_id: int, body: LinkFolderRequest):
+    """Link a Dropbox estimating folder to a bid by explicit path."""
     conn = get_connection()
     try:
         bid = conn.execute("SELECT * FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
         if not bid:
             raise HTTPException(status_code=404, detail="Bid not found")
 
-        number = body.bid_number or bid["bid_number"]
-        if not number:
-            return {"linked": False, "message": "No bid number provided"}
+        if not body.folder_path:
+            return {"linked": False, "message": "No folder path provided"}
 
-        folder = resolve_bid_folder(number)
-        if not folder:
-            return {"linked": False, "message": f"No folder found matching bid number {number}"}
+        folder = Path(body.folder_path.strip().strip('"').strip("'"))
+        if not folder.exists() or not folder.is_dir():
+            return {"linked": False, "message": f"Folder not found: {body.folder_path}"}
 
         conn.execute(
             "UPDATE active_bids SET dropbox_folder_path = ? WHERE id = ?",
@@ -533,6 +645,60 @@ async def sync_documents(bid_id: int):
         raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
 
 
+@router.get("/bids/{bid_id}/sync-stream")
+async def sync_documents_stream(bid_id: int):
+    """Stream sync progress via Server-Sent Events.
+
+    Each file processed sends an SSE event with current/total/filename/action.
+    Final event has type 'done' with the full counts.
+    """
+    import asyncio
+    import json as _json
+    import queue
+    import threading
+
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT id, dropbox_folder_path FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+        if not bid["dropbox_folder_path"]:
+            raise HTTPException(status_code=400, detail="No Dropbox folder linked to this bid")
+    finally:
+        conn.close()
+
+    progress_queue = queue.Queue()
+
+    def on_progress(current, total, filename, action):
+        progress_queue.put({"type": "progress", "current": current, "total": total, "filename": filename, "action": action})
+
+    def run_sync():
+        try:
+            result = sync_bid_documents(bid_id, on_progress=on_progress)
+            progress_queue.put({"type": "done", "result": result})
+        except Exception as e:
+            progress_queue.put({"type": "error", "message": str(e)})
+
+    thread = threading.Thread(target=run_sync, daemon=True)
+    thread.start()
+
+    async def event_stream():
+        while True:
+            try:
+                msg = progress_queue.get_nowait()
+                yield f"data: {_json.dumps(msg)}\n\n"
+                if msg["type"] in ("done", "error"):
+                    return
+            except queue.Empty:
+                await asyncio.sleep(0.3)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/bids/{bid_id}/sync-status")
 async def get_sync_status(bid_id: int):
     """Get sync status and document counts for a bid."""
@@ -561,6 +727,140 @@ async def get_sync_status(bid_id: int):
             "sync_status": bid["sync_status"],
             "last_synced_at": bid["last_synced_at"],
             "document_counts": document_counts,
+        }
+    finally:
+        conn.close()
+
+
+# ── AI Overview Analysis ────────────────────────────────────────
+
+@router.post("/bids/{bid_id}/analyze-overview")
+async def analyze_overview(bid_id: int):
+    """AI analyzes synced documents to auto-populate bid overview fields.
+
+    Reads extracted text from the bid's documents, sends to Claude to extract
+    project metadata (owner, GC, location, type, description), and updates
+    the bid record with any fields not already filled in by the user.
+    """
+    import anthropic
+    import json as _json
+
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT * FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+
+        # Get documents — prioritize contracts, specs, bid schedules
+        docs = conn.execute(
+            """SELECT doc_label, doc_category, extracted_text
+               FROM bid_documents
+               WHERE bid_id = ? AND extracted_text IS NOT NULL AND extracted_text != ''
+               ORDER BY CASE doc_category
+                   WHEN 'contract' THEN 1
+                   WHEN 'bid_schedule' THEN 2
+                   WHEN 'spec' THEN 3
+                   WHEN 'addendum_package' THEN 4
+                   WHEN 'general' THEN 5
+                   ELSE 6
+               END
+               LIMIT 10""",
+            (bid_id,),
+        ).fetchall()
+
+        if not docs:
+            return {"analyzed": False, "message": "No documents with extracted text found. Sync documents first."}
+
+        # Build context from documents — cap total at 60K chars
+        doc_texts = []
+        total_chars = 0
+        for doc in docs:
+            text = doc["extracted_text"]
+            remaining = 60000 - total_chars
+            if remaining <= 0:
+                break
+            if len(text) > remaining:
+                text = text[:remaining]
+            doc_texts.append(f"--- Document: {doc['doc_label']} (Category: {doc['doc_category']}) ---\n{text}")
+            total_chars += len(text)
+
+        combined = "\n\n".join(doc_texts)
+
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": f"""Analyze these construction bid documents and extract project information. Return a JSON object with ONLY these fields (use null for anything you can't determine):
+
+{{
+  "owner": "the project owner or agency (who is paying for the work)",
+  "general_contractor": "the general contractor or prime contractor (if this is a sub-bid)",
+  "location": "project location (city, state or address)",
+  "project_type": "type of work (e.g. heavy civil, industrial, pipeline, building, earthwork)",
+  "description": "2-3 sentence description of the project scope",
+  "estimated_value": null,
+  "bid_date": null
+}}
+
+For bid_date, use YYYY-MM-DD format if you find a bid due date. For estimated_value, use a number (no $ or commas) if you find an engineer's estimate.
+
+Return ONLY valid JSON, no other text.
+
+Documents:
+{combined}"""
+            }],
+        )
+
+        # Parse AI response
+        try:
+            raw = response.content[0].text.strip()
+            # Strip markdown code fence if present
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                raw = raw.strip()
+            extracted = _json.loads(raw)
+        except (_json.JSONDecodeError, IndexError):
+            logger.warning("AI overview analysis returned invalid JSON for bid %d", bid_id)
+            return {"analyzed": False, "message": "AI could not parse documents into structured data"}
+
+        # Update bid — only fill fields that are currently empty
+        updates = []
+        params = []
+        field_map = {
+            "owner": "owner",
+            "general_contractor": "general_contractor",
+            "location": "location",
+            "project_type": "project_type",
+            "description": "description",
+            "estimated_value": "estimated_value",
+            "bid_date": "bid_date",
+        }
+
+        populated = []
+        for ai_key, db_col in field_map.items():
+            ai_val = extracted.get(ai_key)
+            current_val = bid[db_col]
+            if ai_val is not None and (current_val is None or str(current_val).strip() == ""):
+                updates.append(f"{db_col} = ?")
+                params.append(ai_val if not isinstance(ai_val, float) else ai_val)
+                populated.append(db_col)
+
+        if updates:
+            params.append(bid_id)
+            conn.execute(
+                f"UPDATE active_bids SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+
+        return {
+            "analyzed": True,
+            "fields_populated": populated,
+            "extracted": extracted,
         }
     finally:
         conn.close()
