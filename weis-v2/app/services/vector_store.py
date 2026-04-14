@@ -432,11 +432,11 @@ def rebuild_institutional_index() -> dict:
 
         # 3. Diary entries — group by job + cost_code + date
         diary_rows = conn.execute(
-            """SELECT id, job_id, foreman, cost_code, tc_date,
+            """SELECT id, job_id, foreman, cost_code, date,
                       company_note, inspector_note
                FROM diary_entry
                WHERE company_note IS NOT NULL OR inspector_note IS NOT NULL
-               ORDER BY job_id, cost_code, tc_date"""
+               ORDER BY job_id, cost_code, date"""
         ).fetchall()
 
         # Group and embed

@@ -1079,6 +1079,57 @@ RESPONSE FORMAT:
 """ + SCHEMA_DESCRIPTION
 
 
+# System prompt used when an active bid is selected and document context is available.
+# This completely replaces SYSTEM_PROMPT — it puts bid documents first and makes SQL secondary.
+BID_SYSTEM_PROMPT = """You are WEIS — Wollam Construction's estimating intelligence tool. The user is currently reviewing bid documents for an ACTIVE project they are pricing.
+
+YOU HAVE BEEN PROVIDED BID DOCUMENT EXCERPTS BELOW. These are the primary source of truth for this conversation.
+
+HOW TO ANSWER:
+1. ANSWER FROM THE BID DOCUMENT EXCERPTS FIRST. Read them carefully. Quote specific language when relevant.
+2. Cite every answer with the document filename and section heading so the user can find it in the original.
+3. If the excerpts contain the answer, DO NOT run SQL queries — just answer directly from the documents.
+4. ONLY use the run_sql tool when:
+   - The user explicitly asks about historical data, past projects, or comparisons to other jobs
+   - The user asks about production rates, crew sizes, or costs from completed work
+   - The bid documents don't contain enough information and historical context would help
+   - The user says "historically," "on past projects," "compare to actuals," etc.
+5. If the excerpts don't fully answer the question, say what you found and what's missing. Offer to search historical data.
+
+WHAT THE BID DOCUMENTS CONTAIN:
+- Specifications (testing requirements, material standards, submittals, QA/QC)
+- Contract terms (LDs, bonding, insurance, retainage, payment terms)
+- Scope of work (what's included, exclusions, alternates)
+- Addenda and clarifications
+- Bid schedules and pay items
+- RFIs and owner responses
+
+WHEN YOU DO USE SQL (for historical comparisons):
+""" + """- For rates: JOIN rate_item ri → rate_card rc ON ri.card_id = rc.card_id → job j ON rc.job_id = j.job_id
+- For raw actuals: Query hj_costcode cc JOIN job j ON cc.job_id = j.job_id
+- For PM context: pm_context (job level), cc_context (cost code level) — join via job_id
+- For estimates: hb_estimate → hb_biditem → hb_activity → hb_resource (join via estimate_id)
+- For crew details: Query hj_timecard grouped by pay_class_code (ALWAYS filter by job_id + cost_code)
+- Always include job_number and job name in results so you can cite sources
+- Use LIMIT to keep results manageable
+- ⚠️ hj_timecard (324K rows) is large — ALWAYS filter by job_id
+
+HARD RULES — NEVER BREAK THESE:
+- ONLY use numbers from bid documents or your SQL query results. No extrapolation. No inventing numbers.
+- NEVER add % adjustments, contingencies, scaling factors, or risk buffers.
+- NEVER provide unsolicited recommendations, next steps, or guidance.
+- If data doesn't exist in the documents or database, say so in one sentence. Stop there.
+- The estimator decides risk, assumptions, and adjustments — not you.
+
+RESPONSE FORMAT:
+- Lead with a direct answer sourced from the bid documents
+- Cite the document: [Filename | Section] for every claim
+- Use a markdown table when showing multiple items
+- Keep it concise — the estimator will ask follow-ups if they want more
+
+""" + SCHEMA_DESCRIPTION
+
+
 # ─────────────────────────────────────────────────────────────
 # Main Chat Entry Point
 # ─────────────────────────────────────────────────────────────
@@ -1089,21 +1140,88 @@ HISTORICAL_TRIGGERS = [
 ]
 
 
-def _build_vector_context(bid_id: int, message: str) -> str:
+def _sqlite_keyword_search(bid_id: int, message: str, limit: int = 10) -> list[dict]:
+    """Fallback: keyword search on bid_document_chunks via SQLite LIKE.
+
+    Extracts significant words from the message, scores chunks by keyword
+    match count, and returns top results in the same format as search_bid().
+    """
+    import re as _re
+
+    # Extract meaningful keywords (3+ chars, skip stopwords)
+    stopwords = {"the", "and", "for", "this", "that", "with", "are", "what",
+                 "how", "does", "from", "have", "has", "been", "will", "can",
+                 "about", "which", "their", "there", "they", "our", "any"}
+    words = _re.findall(r"[a-zA-Z]{3,}", message.lower())
+    keywords = [w for w in words if w not in stopwords]
+
+    if not keywords:
+        return []
+
+    conn = get_connection()
+    try:
+        # Build a query that counts keyword matches per chunk
+        case_clauses = " + ".join(
+            f"(CASE WHEN LOWER(c.chunk_text) LIKE '%' || ? || '%' THEN 1 ELSE 0 END)"
+            for _ in keywords
+        )
+        sql = f"""
+            SELECT c.id, c.chunk_text, c.section_heading, c.document_id,
+                   d.filename, d.doc_category,
+                   ({case_clauses}) as match_score
+            FROM bid_document_chunks c
+            JOIN bid_documents d ON c.document_id = d.id
+            WHERE c.bid_id = ? AND ({case_clauses}) > 0
+            ORDER BY match_score DESC
+            LIMIT ?
+        """
+        params = list(keywords) + [bid_id] + list(keywords) + [limit]
+        rows = conn.execute(sql, params).fetchall()
+
+        return [
+            {
+                "chunk_id": f"sqlite_{r['id']}",
+                "chunk_text": r["chunk_text"],
+                "section_heading": r["section_heading"] or "",
+                "filename": r["filename"] or "",
+                "doc_category": r["doc_category"] or "",
+                "document_id": r["document_id"],
+                "distance": 1.0 - (r["match_score"] / len(keywords)),  # rough relevance
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("SQLite keyword fallback failed for bid %d: %s", bid_id, e)
+        return []
+    finally:
+        conn.close()
+
+
+def _build_vector_context(bid_id: int, message: str) -> tuple[str, list[dict]]:
     """Build vector search context block for the system prompt.
 
     Searches the bid's document collection, and optionally institutional
     memory if the message contains historical triggers.
+
+    Returns (context_string, vector_sources) where vector_sources is a list
+    of source dicts for the frontend citation badges.
     """
     context_parts = []
+    vector_sources = []
 
     try:
         from app.services.vector_store import search_bid, search_institutional
 
-        # Bid document search
+        # Bid document search (vector)
         results = search_bid(bid_id, message, n_results=10)
+
+        # SQLite keyword fallback if vector search returned nothing
+        if not results:
+            results = _sqlite_keyword_search(bid_id, message)
+
         if results:
             lines = ["\n\n--- Relevant Bid Document Excerpts ---"]
+            seen_files = set()
             for r in results:
                 header = f"\n[{r.get('filename', '?')}"
                 if r.get("section_heading"):
@@ -1111,6 +1229,18 @@ def _build_vector_context(bid_id: int, message: str) -> str:
                 header += "]"
                 lines.append(header)
                 lines.append(r.get("chunk_text", ""))
+
+                # Build source citation (dedupe by filename + section)
+                source_key = (r.get("filename", ""), r.get("section_heading", ""))
+                if source_key not in seen_files:
+                    seen_files.add(source_key)
+                    vector_sources.append({
+                        "source_type": "document",
+                        "filename": r.get("filename", "Unknown"),
+                        "section": r.get("section_heading", ""),
+                        "doc_category": r.get("doc_category", ""),
+                        "distance": r.get("distance"),
+                    })
             context_parts.append("\n".join(lines))
 
         # Historical search (opt-in via trigger words)
@@ -1130,11 +1260,9 @@ def _build_vector_context(bid_id: int, message: str) -> str:
         logger.warning("Vector context build failed for bid %d: %s", bid_id, e)
 
     if context_parts:
-        return ("\n\nThe user is currently reviewing an active bid. "
-                "Here are relevant excerpts from the bid documents and historical data. "
-                "Use these alongside SQL queries to provide comprehensive answers."
-                + "\n".join(context_parts))
-    return ""
+        context_str = "\n".join(context_parts)
+        return context_str, vector_sources
+    return "", vector_sources
 
 
 def send_message(conversation_id: int | None, message: str, bid_id: int | None = None) -> dict:
@@ -1162,8 +1290,8 @@ def send_message(conversation_id: int | None, message: str, bid_id: int | None =
         # 1. Create or validate conversation
         if is_new:
             cursor = conn.execute(
-                "INSERT INTO chat_conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
-                (None, now, now),
+                "INSERT INTO chat_conversations (title, bid_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (None, bid_id, now, now),
             )
             conversation_id = cursor.lastrowid
         else:
@@ -1199,12 +1327,16 @@ def send_message(conversation_id: int | None, message: str, bid_id: int | None =
 
         # 3b. Vector search context — bid documents + optional historical
         effective_system = SYSTEM_PROMPT
+        vector_sources = []
         if bid_id:
             from app.config import VECTOR_SEARCH_ENABLED
             if VECTOR_SEARCH_ENABLED:
-                bid_context = _build_vector_context(bid_id, message)
+                bid_context, vector_sources = _build_vector_context(bid_id, message)
                 if bid_context:
-                    effective_system += bid_context
+                    # Use the bid-focused system prompt instead of appending to the
+                    # historical-data-first prompt. This tells Claude to answer from
+                    # bid documents first and only use SQL for historical comparisons.
+                    effective_system = BID_SYSTEM_PROMPT + bid_context
 
         # 4. Build Claude API messages
         api_messages = []
@@ -1290,8 +1422,8 @@ def send_message(conversation_id: int | None, message: str, bid_id: int | None =
                     block.text for block in response.content if block.type == "text"
                 ) or "I ran out of query attempts. Please try a more specific question."
 
-        # 6. Build source metadata from executed queries
-        sources = _extract_sources_from_queries(executed_queries)
+        # 6. Build source metadata from executed queries + vector search
+        sources = vector_sources + _extract_sources_from_queries(executed_queries)
         sources_json = json.dumps(sources) if sources else None
 
         # 7. Save AI response
@@ -1463,6 +1595,7 @@ def list_conversations() -> list[dict]:
             SELECT
                 c.id,
                 c.title,
+                c.bid_id,
                 c.created_at,
                 c.updated_at,
                 COUNT(m.id) as message_count
@@ -1511,6 +1644,7 @@ def get_conversation(conversation_id: int) -> dict | None:
         return {
             "id": conv["id"],
             "title": conv["title"],
+            "bid_id": conv["bid_id"],
             "created_at": conv["created_at"],
             "updated_at": conv["updated_at"],
             "messages": formatted_messages,

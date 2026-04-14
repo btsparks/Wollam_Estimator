@@ -24,6 +24,8 @@ const state = {
     chatMessages: [],
     chatLoading: false,
     chatDataSummary: null,
+    chatBidId: null,        // Active bid context for vector search
+    chatBids: [],           // Available bids for selector
     // Bidding state
     biddingStatusFilter: 'all',
     biddingTab: 'overview',
@@ -1539,17 +1541,56 @@ async function importRates() {
 }
 
 // ── Chat Page ──
+
+function renderChatBidSelector() {
+    const bids = state.chatBids || [];
+    if (bids.length === 0) return '';
+    const selected = state.chatBidId;
+    const selectedBid = selected ? bids.find(b => b.id === selected) : null;
+    return `
+        <div class="chat-bid-selector">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;opacity:0.6;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <select class="chat-bid-select" onchange="setChatBid(this.value)">
+                <option value="">Historical data only (no bid context)</option>
+                ${bids.map(b => `<option value="${b.id}" ${b.id === selected ? 'selected' : ''}>${escHtml(b.bid_name || b.bid_number)} — ${b.doc_count || 0} docs</option>`).join('')}
+            </select>
+            ${selectedBid ? `<span class="chat-bid-active-badge">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="var(--wollam-green, #22c55e)" stroke="none"><circle cx="12" cy="12" r="10"/></svg>
+                Vector search active
+            </span>` : ''}
+        </div>
+    `;
+}
+
+function setChatBid(bidId) {
+    state.chatBidId = bidId ? parseInt(bidId) : null;
+    // Update placeholder text
+    const input = document.getElementById('chatInput');
+    if (input) {
+        input.placeholder = state.chatBidId
+            ? 'Ask about this bid — specs, contracts, documents...'
+            : 'Ask about historical rates, crews, production...';
+    }
+    // Update bid bar
+    const bar = document.getElementById('chatBidBar');
+    if (bar) bar.innerHTML = renderChatBidSelector();
+    // Update welcome if no messages
+    if (state.chatMessages.length === 0) renderChatWelcome();
+}
+
 async function renderChat() {
     document.getElementById('pageTitle').textContent = 'AI Estimating Chat';
     document.getElementById('pageSubtitle').textContent = '';
 
-    // Load conversations list and data summary in parallel
-    const [convos, summary] = await Promise.all([
+    // Load conversations list, data summary, and active bids in parallel
+    const [convos, summary, bids] = await Promise.all([
         api('/chat/conversations').catch(() => []),
         api('/chat/data-summary').catch(() => null),
+        api('/bidding/bids').catch(() => []),
     ]);
     state.chatConversations = convos;
     state.chatDataSummary = summary;
+    state.chatBids = (bids || []).filter(b => b.status === 'active');
 
     // Override content area padding for full-height chat layout
     const contentArea = document.getElementById('contentArea');
@@ -1575,10 +1616,13 @@ async function renderChat() {
 
             <!-- Main chat area -->
             <div class="chat-main">
+                <div class="chat-bid-bar" id="chatBidBar">
+                    ${renderChatBidSelector()}
+                </div>
                 <div class="chat-messages" id="chatMessages"></div>
                 <div class="chat-input-area">
                     <div class="chat-input-wrap">
-                        <textarea id="chatInput" class="chat-input" placeholder="Ask about historical rates, crews, production..." rows="1"
+                        <textarea id="chatInput" class="chat-input" placeholder="${state.chatBidId ? 'Ask about this bid — specs, contracts, documents...' : 'Ask about historical rates, crews, production...'}" rows="1"
                             onkeydown="chatInputKeydown(event)"></textarea>
                         <button class="chat-send-btn" id="chatSendBtn" onclick="chatSend()">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
@@ -1622,9 +1666,16 @@ function renderChatConvList() {
         const active = c.id === state.chatConversationId ? 'active' : '';
         const date = new Date(c.updated_at || c.created_at);
         const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        // Show bid name badge if conversation is tied to a bid
+        let bidBadge = '';
+        if (c.bid_id) {
+            const bid = state.chatBids.find(b => b.id === c.bid_id);
+            const bidLabel = bid ? bid.bid_name : `Bid #${c.bid_id}`;
+            bidBadge = `<span class="badge badge-document" style="font-size:10px;padding:1px 5px;margin-left:4px;" title="${escHtml(bidLabel)}">${escHtml(bidLabel.length > 20 ? bidLabel.slice(0, 20) + '…' : bidLabel)}</span>`;
+        }
         return `
             <div class="chat-conv-item ${active}" onclick="chatLoadConversation(${c.id})">
-                <div class="chat-conv-title">${escHtml(c.title || 'New Conversation')}</div>
+                <div class="chat-conv-title">${escHtml(c.title || 'New Conversation')}${bidBadge}</div>
                 <div class="chat-conv-meta">${dateStr} &middot; ${c.message_count || 0} msgs</div>
                 <button class="chat-conv-delete" onclick="event.stopPropagation();chatDeleteConversation(${c.id})" title="Delete">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1657,10 +1708,17 @@ function renderChatWelcome() {
             <div class="chat-suggested">
                 <div class="chat-suggested-label">Try asking:</div>
                 <div class="chat-suggested-grid">
+                    ${state.chatBidId ? `
+                    <button class="chat-suggested-btn" onclick="chatSendSuggested(this.textContent)">What are the liquidated damages on this project?</button>
+                    <button class="chat-suggested-btn" onclick="chatSendSuggested(this.textContent)">What does the spec say about compaction testing requirements?</button>
+                    <button class="chat-suggested-btn" onclick="chatSendSuggested(this.textContent)">Summarize the bonding and insurance requirements</button>
+                    <button class="chat-suggested-btn" onclick="chatSendSuggested(this.textContent)">What subcontractor scopes should we plan for?</button>
+                    ` : `
                     <button class="chat-suggested-btn" onclick="chatSendSuggested(this.textContent)">What are our historical rates for concrete wall forming?</button>
                     <button class="chat-suggested-btn" onclick="chatSendSuggested(this.textContent)">How many hours should I plan for HDPE pipe fusing?</button>
                     <button class="chat-suggested-btn" onclick="chatSendSuggested(this.textContent)">What crew size works best for structural steel erection?</button>
                     <button class="chat-suggested-btn" onclick="chatSendSuggested(this.textContent)">Compare earthwork production across our completed jobs</button>
+                    `}
                 </div>
             </div>
         </div>
@@ -1690,14 +1748,23 @@ function renderChatMessages() {
                         Sources (${sources.length})
                     </div>
                     <div class="chat-sources-list">
-                        ${sources.map(s => `
-                            <span class="chat-source-badge badge-${s.source_type === 'estimate' ? 'estimate' : s.source_type === 'raw_actuals' ? 'raw-actuals' : (s.confidence || 'none').toLowerCase()}">
-                                ${s.source_type === 'estimate'
-                                    ? `&#9670; ${escHtml(s.job_number)} &middot; ESTIMATE &middot; $${s.bid_total ? Number(s.bid_total).toLocaleString() : '?'}`
-                                    : `${escHtml(s.job_number)} &middot; ${escHtml(s.cost_code)} &middot; ${(s.confidence || 'N/A').toUpperCase()}`}
+                        ${sources.map(s => {
+                            if (s.source_type === 'document') {
+                                return `<span class="chat-source-badge badge-document" title="${escHtml(s.section || '')}">
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                    ${escHtml(s.filename || 'Document')}${s.section ? ' &middot; ' + escHtml(s.section) : ''}
+                                </span>`;
+                            }
+                            if (s.source_type === 'estimate') {
+                                return `<span class="chat-source-badge badge-estimate">
+                                    &#9670; ${escHtml(s.job_number)} &middot; ESTIMATE &middot; $${s.bid_total ? Number(s.bid_total).toLocaleString() : '?'}
+                                </span>`;
+                            }
+                            return `<span class="chat-source-badge badge-${(s.confidence || 'none').toLowerCase()}">
+                                ${escHtml(s.job_number)} &middot; ${escHtml(s.cost_code)} &middot; ${(s.confidence || 'N/A').toUpperCase()}
                                 ${s.has_pm_context ? '<span title="Has PM context" style="margin-left:2px;">&#9679;</span>' : ''}
-                            </span>
-                        `).join('')}
+                            </span>`;
+                        }).join('')}
                     </div>
                 </div>
             `;
@@ -1797,6 +1864,7 @@ async function chatSend() {
             body: JSON.stringify({
                 conversation_id: state.chatConversationId,
                 message: message,
+                bid_id: state.chatBidId || undefined,
             }),
         });
 
@@ -1845,6 +1913,12 @@ async function chatLoadConversation(convId) {
             content: m.content,
             sources: m.sources || [],
         }));
+        // Restore bid context if conversation was tied to a bid
+        if (conv.bid_id) {
+            state.chatBidId = conv.bid_id;
+            const bar = document.getElementById('chatBidBar');
+            if (bar) bar.innerHTML = renderChatBidSelector();
+        }
     } catch {
         state.chatMessages = [];
     }

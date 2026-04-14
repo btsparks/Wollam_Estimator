@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.11"
+SCHEMA_VERSION = "2.12"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -849,6 +849,7 @@ def _migrate_1_9_to_2_0(conn: sqlite3.Connection) -> None:
     CREATE TABLE IF NOT EXISTS chat_conversations (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         title           TEXT,
+        bid_id          INTEGER,
         created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -1376,6 +1377,23 @@ def _migrate_2_10_to_2_11(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.11'")
 
 
+def _migrate_2_11_to_2_12(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.11 to 2.12: Chat bid context.
+
+    Changes:
+    1. Add bid_id to chat_conversations — tracks which bid a conversation is about
+    """
+    for stmt in [
+        "ALTER TABLE chat_conversations ADD COLUMN bid_id INTEGER",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    conn.execute("UPDATE schema_version SET version = '2.12'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1456,6 +1474,9 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.10"
             if current == "2.10":
                 _migrate_2_10_to_2_11(conn)
+                current = "2.11"
+            if current == "2.11":
+                _migrate_2_11_to_2_12(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:
