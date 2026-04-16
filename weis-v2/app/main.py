@@ -40,8 +40,8 @@ app.include_router(settings_router)
 app.include_router(chat_router)
 app.include_router(estimates_router)
 app.include_router(sov_intelligence_router)  # Before bidding — more specific SOV routes
+app.include_router(agents_router)  # Before bidding — setup-progress, refresh-stream
 app.include_router(bidding_router)
-app.include_router(agents_router)
 app.include_router(vector_router)
 app.include_router(vendors_router)
 app.include_router(procurement_router)
