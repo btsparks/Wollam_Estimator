@@ -52,7 +52,17 @@ Return your analysis as a JSON object with this exact structure:
       "risk": "Description of the risk",
       "severity": "low|medium|high|critical",
       "clause": "Section/Article reference",
-      "recommendation": "How to account for this in the estimate"
+      "recommendation": "How to account for this in the estimate",
+      "affected_sov_items": ["all"]
+    }
+  ],
+  "missing_information": [
+    {
+      "what_is_missing": "Description of ambiguous or missing contract term",
+      "why_it_matters": "Impact on estimating if not resolved",
+      "affected_sov_items": ["all"],
+      "suggested_action": "rfi|clarification|verify|assumption",
+      "suggested_question": "Suggested question for the owner — frame carefully to avoid committing to an unfavorable interpretation"
     }
   ],
   "flags": ["Critical items the estimating team must address"]
@@ -63,6 +73,9 @@ Rules:
 - If a term is not found in the documents, use null — don't guess
 - Focus on items that affect the estimate price
 - For key_risks, include a practical recommendation for the estimating team
+- For key_risks, indicate which SOV items are specifically affected. Use "all" for project-wide risks (e.g., retainage, payment terms). Use specific item numbers for risks tied to particular scope (e.g., LD milestones tied to specific work items).
+- For missing_information, identify: contract terms that are ambiguous or contradictory, referenced documents not included (e.g., "per Owner's safety manual" without providing it), unclear change order pricing mechanisms, vague milestone definitions that affect LD exposure, insurance requirements that reference standards without specifying limits, and any provisions that could be interpreted multiple ways with different cost implications
+- For each legal missing_information item, frame the suggested_question carefully — legal clarifications need to be asked in a way that doesn't inadvertently commit the contractor to an unfavorable interpretation
 - Return ONLY valid JSON — no markdown, no explanation
 """
 
@@ -131,5 +144,6 @@ class LegalAnalystAgent(BaseAgent):
             "payment_terms": {},
             "change_order_provisions": None,
             "key_risks": [],
+            "missing_information": [],
             "flags": [],
         }

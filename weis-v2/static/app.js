@@ -2980,6 +2980,7 @@ async function loadBidDetail(bidId) {
         document.getElementById('pageTitle').textContent = bid.bid_name;
         document.getElementById('pageSubtitle').textContent = [bid.owner, bid.location].filter(Boolean).join(' — ') || 'Bid Project';
         renderBidDetail(bid);
+        loadBidCostKpi(bid.id);
     } catch (err) {
         content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
     }
@@ -3002,6 +3003,7 @@ async function renderBidDetail(bid) {
             <div class="kpi-card card-animate"><div class="kpi-label">Due Date</div><div class="kpi-value" style="font-size:16px;">${bidDueCountdown(bid.bid_date)}</div></div>
             <div class="kpi-card card-animate"><div class="kpi-label">Documents</div><div class="kpi-value">${bid.doc_count || 0}</div></div>
             <div class="kpi-card card-animate"><div class="kpi-label">SOV Items</div><div class="kpi-value">${bid.sov_count || 0}</div></div>
+            <div class="kpi-card card-animate" id="costKpi"><div class="kpi-label">API Cost</div><div class="kpi-value" style="font-size:16px;" id="costKpiValue">—</div></div>
         </div>
 
         <!-- Tabs -->
@@ -3024,6 +3026,77 @@ async function renderBidDetail(bid) {
 function switchBidTab(tab, bidId) {
     state.biddingTab = tab;
     loadBidDetail(bidId);
+}
+
+async function loadBidCostKpi(bidId) {
+    try {
+        const data = await api(`/bidding/bids/${bidId}/cost-summary`);
+        const el = document.getElementById('costKpiValue');
+        if (!el) return;
+        const cost = data.totals.combined_cost_est_usd;
+        const tokens = data.totals.combined_tokens;
+        if (cost > 0) {
+            el.textContent = `$${cost.toFixed(2)}`;
+            el.title = `${(tokens / 1000).toFixed(0)}K tokens total`;
+            el.style.cursor = 'pointer';
+            el.onclick = () => showCostDetail(bidId);
+        } else {
+            el.textContent = '$0.00';
+        }
+    } catch {
+        // Cost tracking table may not exist yet
+    }
+}
+
+async function showCostDetail(bidId) {
+    const data = await api(`/bidding/bids/${bidId}/cost-summary`);
+    const t = data.totals;
+
+    let breakdown = '';
+    // Agent costs
+    if (data.agent_reports.length) {
+        breakdown += '<div style="margin-bottom:8px;font-size:11px;font-weight:600;color:var(--text-secondary);">AGENT ANALYSIS</div>';
+        data.agent_reports.forEach(a => {
+            const est = (a.tokens_used * 0.8 * 1.0 / 1e6) + (a.tokens_used * 0.2 * 5.0 / 1e6);
+            breakdown += `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;">
+                <span>${escHtml(a.agent_name.replace(/_/g, ' '))}</span>
+                <span style="color:var(--text-tertiary);">${(a.tokens_used/1000).toFixed(0)}K tok — $${est.toFixed(3)}</span>
+            </div>`;
+        });
+    }
+
+    // Logged usage
+    if (data.usage_log.length) {
+        breakdown += '<div style="margin:10px 0 8px;font-size:11px;font-weight:600;color:var(--text-secondary);">OTHER API CALLS</div>';
+        data.usage_log.forEach(u => {
+            breakdown += `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;">
+                <span>${escHtml(u.operation)}</span>
+                <span style="color:var(--text-tertiary);">${u.call_count} calls, ${(u.total_tokens/1000).toFixed(0)}K tok — $${u.cost_usd.toFixed(3)}</span>
+            </div>`;
+        });
+    }
+
+    // Show as a modal/overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center;';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `
+        <div style="background:white;border-radius:var(--radius-md);padding:24px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:var(--shadow-lg);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="margin:0;font-size:16px;font-weight:600;">API Cost Breakdown</h3>
+                <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-tertiary);">&times;</button>
+            </div>
+            ${breakdown || '<p style="font-size:13px;color:var(--text-tertiary);">No API usage recorded yet.</p>'}
+            <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-default);display:flex;justify-content:space-between;font-size:14px;font-weight:600;">
+                <span>Total Estimated Cost</span>
+                <span style="color:var(--wollam-navy);">$${t.combined_cost_est_usd.toFixed(2)}</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;">
+                ${(t.combined_tokens/1000).toFixed(0)}K tokens total (Haiku: $1/M input, $5/M output)
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
 }
 
 // ── Overview Tab ──
@@ -3148,23 +3221,32 @@ async function renderBidSOV(bidId) {
     tc.innerHTML = '<div class="empty-state"><p>Loading schedule...</p></div>';
 
     try {
-        const [items, groups] = await Promise.all([
+        const [items, groups, intelSummary] = await Promise.all([
             api(`/bidding/bids/${bidId}/sov`),
             api(`/bidding/bids/${bidId}/groups`),
+            api(`/bidding/bids/${bidId}/sov/intelligence-summary`).catch(() => []),
         ]);
 
-        // Build group color map
+        // Build lookup maps
         const groupColors = {};
         groups.forEach((g, i) => { groupColors[g.id] = GROUP_COLORS[i % GROUP_COLORS.length]; });
+        const intelMap = {};
+        intelSummary.forEach(s => { intelMap[s.sov_item_id] = s; });
+
+        const hasIntel = intelSummary.length > 0;
+        const hasStaleIntel = intelSummary.some(s => s.is_stale);
 
         tc.innerHTML = `
             <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
                 <button class="btn btn-primary btn-sm" onclick="showSOVUpload(${bidId})">Upload Schedule</button>
                 <button class="btn btn-sm" onclick="showAddSOVItem(${bidId})">+ Add Item</button>
                 <button class="btn btn-sm" onclick="autoRateAll(${bidId})">Auto-Rate All</button>
+                <button class="btn btn-sm" style="background:var(--wollam-navy);color:white;" onclick="mapSOVIntelligence(${bidId})" id="mapIntelBtn">${hasStaleIntel ? 'Re-Map Intelligence' : 'Map Intelligence'}</button>
                 <div style="flex:1;"></div>
                 <button class="btn btn-sm" onclick="showGroupManager(${bidId})">Pricing Groups (${groups.length})</button>
             </div>
+
+            ${hasStaleIntel ? `<div style="padding:8px 12px;margin-bottom:12px;background:#FFFBEB;border-left:3px solid #F59E0B;border-radius:var(--radius-sm);font-size:12px;color:#92400E;">&#9888; Intelligence mappings may be outdated — documents or agents have changed since last mapping.</div>` : ''}
 
             ${state.biddingSovPreview ? renderSOVPreview(bidId) : ''}
 
@@ -3172,6 +3254,12 @@ async function renderBidSOV(bidId) {
             <div id="groupManager" style="display:none;"></div>
 
             ${items.length === 0 ? '<div class="empty-state"><p>No schedule items yet. Upload a bid schedule or add items manually.</p></div>' : `
+            <div style="margin-bottom:8px;font-size:12px;color:var(--text-secondary);">
+                ${items.filter(i => i.in_scope === 0).length > 0
+                    ? `<span>${items.filter(i => i.in_scope !== 0).length} in scope, ${items.filter(i => i.in_scope === 0).length} out of scope</span>`
+                    : `<span>${items.length} items (all in scope)</span>`
+                }
+            </div>
             <div class="card" style="padding:0;overflow-x:auto;">
                 <table style="width:100%;border-collapse:collapse;font-size:13px;">
                     <thead>
@@ -3181,39 +3269,51 @@ async function renderBidSOV(bidId) {
                             <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:70px;">Unit</th>
                             <th style="padding:10px 12px;text-align:right;font-weight:600;color:var(--text-secondary);width:90px;">Qty</th>
                             <th style="padding:10px 12px;text-align:right;font-weight:600;color:var(--text-secondary);width:100px;">Rate/Unit</th>
+                            <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);width:80px;">Intel</th>
                             <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:120px;">Group</th>
-                            <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);width:80px;">Actions</th>
+                            <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);width:100px;">
+                                Actions
+                                <input type="checkbox" ${items.every(i => i.in_scope !== 0) ? 'checked' : ''} onchange="toggleAllScope(${bidId}, this.checked)" title="Toggle all in scope" style="cursor:pointer;margin-left:4px;vertical-align:middle;">
+                            </th>
                         </tr>
                     </thead>
                     <tbody>
                         ${items.map(item => {
                             const gc = item.pricing_group_id ? groupColors[item.pricing_group_id] : null;
+                            const intel = intelMap[item.id];
+                            const intelBadge = intel ? sovIntelBadge(intel) : '<span style="color:var(--text-tertiary);font-size:11px;">—</span>';
+                            const outOfScope = item.in_scope === 0;
+                            const rowOpacity = outOfScope ? 'opacity:0.45;' : '';
                             return `
-                            <tr style="${gc ? `border-left:3px solid ${gc};` : ''}border-bottom:1px solid var(--border-default);" id="sov-row-${item.id}">
+                            <tr style="${gc ? `border-left:3px solid ${gc};` : ''}border-bottom:1px solid var(--border-default);cursor:pointer;${rowOpacity}" id="sov-row-${item.id}" onclick="toggleSOVIntelligence(${item.id}, ${bidId})">
                                 <td style="padding:8px 12px;color:var(--text-secondary);font-family:monospace;">${escHtml(item.item_number || '—')}</td>
-                                <td style="padding:8px 12px;">${escHtml(item.description)}</td>
+                                <td style="padding:8px 12px;">${escHtml(item.description)}${outOfScope ? ' <span style="font-size:10px;color:var(--text-tertiary);font-style:italic;">(out of scope)</span>' : ''}</td>
                                 <td style="padding:8px 12px;color:var(--text-secondary);">${escHtml(item.unit || '—')}</td>
                                 <td style="padding:8px 12px;text-align:right;">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
                                 <td style="padding:8px 12px;text-align:right;">
                                     ${item.unit_price != null
                                         ? `<span style="font-weight:500;">$${fmtRate(item.unit_price)}</span>
                                            ${item.rate_confidence ? `<br><span style="font-size:10px;color:${item.rate_confidence === 'high' ? 'var(--success-green)' : item.rate_confidence === 'medium' ? '#F59E0B' : 'var(--text-tertiary)'};">${item.rate_confidence.toUpperCase()}</span>` : ''}`
-                                        : `<button onclick="lookupSOVRate(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--wollam-navy);font-size:11px;text-decoration:underline;">Lookup</button>`
+                                        : outOfScope ? '<span style="color:var(--text-tertiary);font-size:11px;">—</span>'
+                                        : `<button onclick="event.stopPropagation();lookupSOVRate(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--wollam-navy);font-size:11px;text-decoration:underline;">Lookup</button>`
                                     }
                                 </td>
+                                <td style="padding:8px 12px;text-align:center;">${outOfScope ? '<span style="color:var(--text-tertiary);font-size:11px;">—</span>' : intelBadge}</td>
                                 <td style="padding:8px 12px;">
                                     ${item.group_name ? `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${gc};display:inline-block;"></span>${escHtml(item.group_name)}</span>` : '<span style="color:var(--text-tertiary);">—</span>'}
                                 </td>
-                                <td style="padding:8px 12px;text-align:center;">
+                                <td style="padding:8px 12px;text-align:center;" onclick="event.stopPropagation();">
                                     <button onclick="editSOVItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);padding:2px;" title="Edit">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                     </button>
                                     <button onclick="deleteSOVItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);padding:2px;" title="Delete">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                                     </button>
+                                    <input type="checkbox" ${!outOfScope ? 'checked' : ''} onchange="toggleItemScope(${item.id}, ${bidId}, this.checked)" style="cursor:pointer;margin-left:4px;vertical-align:middle;" title="${outOfScope ? 'Out of scope — check to include' : 'In scope — uncheck to exclude'}">
                                 </td>
                             </tr>
-                            <tr><td colspan="7" style="padding:0;"><div id="rate-panel-${item.id}" style="display:none;"></div></td></tr>`;
+                            <tr><td colspan="8" style="padding:0;"><div id="rate-panel-${item.id}" style="display:none;"></div></td></tr>
+                            <tr><td colspan="8" style="padding:0;"><div id="intel-panel-${item.id}" style="display:none;"></div></td></tr>`;
                         }).join('')}
                     </tbody>
                 </table>
@@ -4218,15 +4318,63 @@ function renderChiefBrief(report) {
 async function runAllAgents(bidId) {
     const btn = document.getElementById('runAllBtn');
     btn.disabled = true;
-    btn.textContent = 'Running agents...';
+    btn.textContent = 'Running...';
+
+    // Insert progress bar after the action bar
+    const tc = document.getElementById('bidTabContent');
+    let progressEl = document.getElementById('agentProgress');
+    if (!progressEl) {
+        progressEl = document.createElement('div');
+        progressEl.id = 'agentProgress';
+        progressEl.style.cssText = 'margin:12px 0;';
+        tc.insertBefore(progressEl, tc.children[1] || null);
+    }
+    progressEl.innerHTML = renderProgressBar(0, 1, 'Starting agents...', 'agent');
 
     try {
-        await api(`/bidding/bids/${bidId}/analyze`, { method: 'POST' });
-        // Reload the tab
+        await new Promise((resolve, reject) => {
+            const startTime = Date.now();
+            const evtSource = new EventSource(`/api/bidding/bids/${bidId}/analyze-stream`);
+            evtSource.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'progress') {
+                        const elapsed = Math.round((Date.now() - startTime) / 1000);
+                        const timeStr = elapsed > 60 ? `${Math.floor(elapsed/60)}m ${elapsed%60}s` : `${elapsed}s`;
+                        progressEl.innerHTML = renderProgressBar(msg.current, msg.total, `Running ${msg.agent} (${msg.current} of ${msg.total}) — ${timeStr} elapsed`, 'agent');
+                    } else if (msg.type === 'done') {
+                        evtSource.close();
+                        resolve(msg.result);
+                    } else if (msg.type === 'error') {
+                        evtSource.close();
+                        reject(new Error(msg.message));
+                    }
+                } catch (e) { evtSource.close(); reject(e); }
+            };
+            evtSource.onerror = (e) => {
+                if (evtSource.readyState === EventSource.CLOSED) {
+                    reject(new Error('Connection lost'));
+                }
+            };
+        });
+
+        progressEl.innerHTML = renderProgressBar(1, 1, 'All agents complete!', 'agent', true);
+        setTimeout(() => { if (progressEl.parentNode) progressEl.remove(); }, 3000);
+
         const bid = await api(`/bidding/bids/${bidId}`);
         renderBidIntelligence(bid);
+
+        // Re-insert the progress complete message and map banner
+        const banner = document.createElement('div');
+        banner.style.cssText = 'padding:10px 16px;margin-top:12px;background:var(--bg-selected);border:1px solid var(--wollam-navy);border-radius:var(--radius-sm);display:flex;align-items:center;gap:12px;';
+        banner.innerHTML = `
+            <span style="font-size:13px;color:var(--text-primary);">Agents complete. Map intelligence findings to bid items?</span>
+            <button class="btn btn-primary btn-sm" onclick="switchBidTab('sov',${bidId});setTimeout(()=>mapSOVIntelligence(${bidId}),300);">Map to SOV Items</button>
+            <button class="btn btn-sm" onclick="this.parentElement.remove()">Dismiss</button>
+        `;
+        document.getElementById('bidTabContent').appendChild(banner);
     } catch (err) {
-        alert('Error running agents: ' + err.message);
+        progressEl.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'agent', false, true);
         btn.disabled = false;
         btn.textContent = 'Run All Agents';
     }
@@ -4237,14 +4385,31 @@ async function runSingleAgent(bidId) {
     const agentName = select.value;
     if (!agentName) { alert('Select an agent first'); return; }
 
+    const runBtn = select.nextElementSibling;
     select.disabled = true;
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Running...'; }
+
+    // Show indeterminate progress
+    const tc = document.getElementById('bidTabContent');
+    let progressEl = document.getElementById('agentProgress');
+    if (!progressEl) {
+        progressEl = document.createElement('div');
+        progressEl.id = 'agentProgress';
+        progressEl.style.cssText = 'margin:12px 0;';
+        tc.insertBefore(progressEl, tc.children[1] || null);
+    }
+    progressEl.innerHTML = renderProgressBar(-1, 1, `Running ${agentName.replace(/_/g, ' ')}...`, 'agent');
+
     try {
         await api(`/bidding/bids/${bidId}/analyze/${agentName}`, { method: 'POST' });
+        progressEl.innerHTML = renderProgressBar(1, 1, 'Agent complete!', 'agent', true);
+        setTimeout(() => { if (progressEl.parentNode) progressEl.remove(); }, 2000);
         const bid = await api(`/bidding/bids/${bidId}`);
         renderBidIntelligence(bid);
     } catch (err) {
-        alert('Error: ' + err.message);
+        progressEl.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'agent', false, true);
         select.disabled = false;
+        if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run'; }
     }
 }
 
@@ -4382,15 +4547,267 @@ async function autoRateAll(bidId) {
     btn.disabled = true;
     btn.textContent = 'Rating...';
 
+    let progressEl = document.getElementById('autoRateProgress');
+    if (!progressEl) {
+        progressEl = document.createElement('div');
+        progressEl.id = 'autoRateProgress';
+        progressEl.style.cssText = 'margin:12px 0;';
+        btn.parentElement.after(progressEl);
+    }
+    progressEl.innerHTML = renderProgressBar(-1, 1, 'Auto-rating all SOV items...', 'rate');
+
     try {
         const result = await api(`/bidding/bids/${bidId}/sov/auto-rate`, { method: 'POST' });
-        alert(`Auto-rate complete: ${result.matched} matched, ${result.ambiguous} ambiguous, ${result.no_match} no match, ${result.skipped} skipped`);
+        progressEl.innerHTML = renderProgressBar(1, 1, `Done! ${result.matched} matched, ${result.ambiguous} ambiguous, ${result.no_match} no match`, 'rate', true);
+        setTimeout(() => { if (progressEl.parentNode) progressEl.remove(); }, 3000);
         renderBidSOV(bidId);
     } catch (err) {
-        alert('Error: ' + err.message);
+        progressEl.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'rate', false, true);
         btn.disabled = false;
         btn.textContent = 'Auto-Rate All';
     }
+}
+
+// ── SOV Scope Toggle ──
+
+async function toggleItemScope(itemId, bidId, inScope) {
+    try {
+        await api(`/bidding/bids/${bidId}/sov/set-scope`, {
+            method: 'POST',
+            body: JSON.stringify({ item_ids: [itemId], in_scope: inScope ? 1 : 0 }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+        renderBidSOV(bidId);
+    }
+}
+
+async function toggleAllScope(bidId, inScope) {
+    try {
+        const items = await api(`/bidding/bids/${bidId}/sov`);
+        const ids = items.map(i => i.id);
+        await api(`/bidding/bids/${bidId}/sov/set-scope`, {
+            method: 'POST',
+            body: JSON.stringify({ item_ids: ids, in_scope: inScope ? 1 : 0 }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+// ── Progress Bar ──
+
+function renderProgressBar(current, total, label, id, done, error) {
+    const pct = total > 0 && current >= 0 ? Math.round((current / total) * 100) : 0;
+    const indeterminate = current < 0;
+    const barColor = error ? 'var(--danger-red)' : done ? 'var(--success-green)' : 'var(--wollam-navy)';
+    const barWidth = indeterminate ? '30%' : `${pct}%`;
+    const animation = indeterminate ? 'animation:progressIndeterminate 1.5s ease-in-out infinite;' : '';
+
+    return `<div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:10px 14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span style="font-size:12px;color:${error ? 'var(--danger-red)' : 'var(--text-primary)'};">${escHtml(label)}</span>
+            ${!indeterminate && !done && !error ? `<span style="font-size:11px;color:var(--text-tertiary);">${pct}%</span>` : ''}
+        </div>
+        <div style="height:6px;background:var(--bg-hover);border-radius:3px;overflow:hidden;">
+            <div style="height:100%;width:${barWidth};background:${barColor};border-radius:3px;transition:width 0.3s ease;${animation}"></div>
+        </div>
+    </div>`;
+}
+
+// ── SOV Intelligence Mapper ──
+
+function sovIntelBadge(intel) {
+    if (!intel || !intel.finding_count) return '<span style="color:var(--text-tertiary);font-size:11px;">—</span>';
+    const colorMap = {critical: '#EF4444', high: '#EF4444', medium: '#F59E0B', low: 'var(--success-green)', info: 'var(--text-tertiary)'};
+    const color = colorMap[intel.max_severity] || 'var(--text-tertiary)';
+    const stale = intel.is_stale ? ' &#9888;' : '';
+    return `<span class="badge" style="background:${color};color:white;font-size:10px;padding:2px 6px;">${intel.finding_count}${stale}</span>`;
+}
+
+async function mapSOVIntelligence(bidId) {
+    const btn = document.getElementById('mapIntelBtn');
+    if (!btn) return;
+    btn.disabled = true;
+    btn.textContent = 'Mapping...';
+
+    // Insert progress bar
+    let progressEl = document.getElementById('mapIntelProgress');
+    if (!progressEl) {
+        progressEl = document.createElement('div');
+        progressEl.id = 'mapIntelProgress';
+        progressEl.style.cssText = 'margin:12px 0;';
+        btn.parentElement.after(progressEl);
+    }
+    progressEl.innerHTML = renderProgressBar(0, 1, 'Starting intelligence mapping...', 'intel');
+
+    try {
+        const result = await new Promise((resolve, reject) => {
+            const startTime = Date.now();
+            const evtSource = new EventSource(`/api/bidding/bids/${bidId}/sov/map-intelligence-stream`);
+            evtSource.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'progress') {
+                        const elapsed = Math.round((Date.now() - startTime) / 1000);
+                        const perItem = msg.current > 1 ? elapsed / (msg.current - 1) : 0;
+                        const remaining = perItem > 0 ? Math.round(perItem * (msg.total - msg.current + 1)) : 0;
+                        const eta = remaining > 60 ? `~${Math.round(remaining/60)}m left` : remaining > 0 ? `~${remaining}s left` : '';
+                        progressEl.innerHTML = renderProgressBar(msg.current, msg.total, `Mapping item ${msg.item} (${msg.current} of ${msg.total}) ${eta}`, 'intel');
+                    } else if (msg.type === 'done') {
+                        evtSource.close();
+                        resolve(msg.result);
+                    } else if (msg.type === 'error') {
+                        evtSource.close();
+                        reject(new Error(msg.message));
+                    }
+                } catch (e) { evtSource.close(); reject(e); }
+            };
+            evtSource.onerror = (e) => {
+                // EventSource auto-reconnects on transient errors; only reject if closed
+                if (evtSource.readyState === EventSource.CLOSED) {
+                    reject(new Error('Connection lost'));
+                }
+            };
+        });
+
+        const mapped = result.items_mapped || 0;
+        const findings = result.total_findings || 0;
+        progressEl.innerHTML = renderProgressBar(1, 1, `Done! ${mapped} item(s), ${findings} finding(s) in ${result.duration_seconds}s`, 'intel', true);
+        setTimeout(() => { if (progressEl.parentNode) progressEl.remove(); }, 4000);
+        renderBidSOV(bidId);
+    } catch (err) {
+        progressEl.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'intel', false, true);
+        btn.disabled = false;
+        btn.textContent = 'Map Intelligence';
+    }
+}
+
+async function toggleSOVIntelligence(itemId, bidId) {
+    const panel = document.getElementById(`intel-panel-${itemId}`);
+    if (!panel) return;
+
+    if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+
+    // Close other intel panels
+    document.querySelectorAll('[id^="intel-panel-"]').forEach(p => { if (p.id !== `intel-panel-${itemId}`) p.style.display = 'none'; });
+
+    panel.style.display = 'block';
+    panel.innerHTML = '<p style="font-size:12px;color:var(--text-tertiary);padding:12px;">Loading intelligence...</p>';
+
+    try {
+        const data = await api(`/bidding/bids/${bidId}/sov/${itemId}/intelligence`);
+        panel.innerHTML = renderSOVIntelligencePanel(data, itemId);
+    } catch (err) {
+        panel.innerHTML = `<p style="font-size:12px;color:var(--danger-red);padding:12px;">Error loading intelligence: ${escHtml(err.message)}</p>`;
+    }
+}
+
+function renderSOVIntelligencePanel(data, itemId) {
+    if (!data || data.total_findings === 0) {
+        return '<div style="padding:12px 16px;font-size:12px;color:var(--text-tertiary);background:var(--bg-hover);">No intelligence mapped for this item yet. Run agents and click "Map Intelligence".</div>';
+    }
+
+    let html = '<div style="padding:12px 16px;background:var(--bg-hover);border-top:1px solid var(--border-default);">';
+
+    // Stale warning
+    if (data.is_stale) {
+        html += '<div style="padding:6px 10px;margin-bottom:10px;background:#FFFBEB;border-left:3px solid #F59E0B;border-radius:var(--radius-sm);font-size:11px;color:#92400E;">&#9888; Intelligence may be outdated — re-map recommended.</div>';
+    }
+
+    // Estimator notes
+    if (data.estimator_notes) {
+        html += `<div style="padding:8px 10px;margin-bottom:10px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-sm);">
+            <div style="font-size:11px;font-weight:600;color:var(--wollam-navy);margin-bottom:4px;">ESTIMATOR NOTES</div>
+            <div style="font-size:12px;color:var(--text-primary);">${escHtml(data.estimator_notes)}</div>
+        </div>`;
+    }
+
+    // Spec sections
+    if (data.spec_sections_summary) {
+        html += `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;"><strong>Relevant Specs:</strong> ${escHtml(data.spec_sections_summary)}</div>`;
+    }
+
+    // Domain sections in order
+    const domainOrder = [
+        { key: 'missing_information', label: 'Missing Information & Clarifications', icon: '&#10067;' },
+        { key: 'legal', label: 'Contract & Legal', icon: '&#9878;' },
+        { key: 'qaqc', label: 'QA/QC Requirements', icon: '&#128269;' },
+        { key: 'subcontract', label: 'Subcontract Scope', icon: '&#128295;' },
+        { key: 'document_control', label: 'Document Control', icon: '&#128196;' },
+        { key: 'drawing', label: 'Drawings', icon: '&#128208;' },
+    ];
+
+    domainOrder.forEach(d => {
+        const findings = data.domains[d.key];
+        if (!findings || findings.length === 0) return;
+
+        if (d.key === 'missing_information') {
+            html += renderMissingInfoSection(findings);
+        } else {
+            html += renderDomainSection(d.key, findings, d.label, d.icon);
+        }
+    });
+
+    html += '</div>';
+    return html;
+}
+
+function renderMissingInfoSection(findings) {
+    const actionColors = { rfi: '#EF4444', clarification: '#F59E0B', verify: '#3B82F6', assumption: '#94A3B8' };
+    const actionLabels = { rfi: 'RFI', clarification: 'CLARIFY', verify: 'VERIFY', assumption: 'ASSUME' };
+
+    let html = `<div style="margin-bottom:10px;">
+        <div style="font-size:11px;font-weight:600;color:var(--wollam-navy);margin-bottom:6px;">&#10067; MISSING INFORMATION & CLARIFICATIONS</div>`;
+
+    findings.forEach(f => {
+        const meta = f.metadata || {};
+        const action = meta.suggested_action || 'verify';
+        const borderColor = actionColors[action] || '#94A3B8';
+        const label = actionLabels[action] || action.toUpperCase();
+
+        html += `<div style="padding:8px 10px;margin-bottom:6px;background:var(--bg-surface);border:1px solid var(--border-default);border-left:3px solid ${borderColor};border-radius:var(--radius-sm);font-size:12px;">
+            <div style="font-weight:600;color:var(--text-primary);">
+                <span class="badge" style="background:${borderColor};color:white;font-size:9px;padding:1px 5px;margin-right:4px;">${label}</span>
+                ${escHtml(f.title)}
+            </div>
+            <div style="color:var(--text-secondary);margin-top:2px;">${escHtml(f.detail)}</div>
+            ${meta.suggested_question ? `<div style="margin-top:4px;padding:4px 8px;background:var(--bg-hover);border-radius:4px;font-size:11px;color:var(--text-secondary);font-style:italic;">"${escHtml(meta.suggested_question)}"</div>` : ''}
+            ${f.agent_name && f.agent_name !== 'sov_mapper' ? `<div style="font-size:10px;color:var(--text-tertiary);margin-top:2px;">Source: ${escHtml(f.agent_name.replace(/_/g, ' '))}</div>` : ''}
+        </div>`;
+    });
+
+    html += '</div>';
+    return html;
+}
+
+function renderDomainSection(domain, findings, label, icon) {
+    const severityColors = {critical: '#EF4444', high: '#EF4444', medium: '#F59E0B', low: 'var(--success-green)', info: 'var(--text-tertiary)'};
+
+    let html = `<div style="margin-bottom:10px;">
+        <div style="font-size:11px;font-weight:600;color:var(--wollam-navy);margin-bottom:6px;">${icon} ${label.toUpperCase()}</div>`;
+
+    findings.forEach(f => {
+        const sevColor = severityColors[f.severity] || 'var(--text-tertiary)';
+
+        html += `<div style="padding:6px 10px;margin-bottom:4px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:12px;">
+            <div style="font-weight:500;color:var(--text-primary);">
+                ${f.severity && f.severity !== 'info' ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${sevColor};margin-right:4px;"></span>` : ''}
+                ${escHtml(f.title)}
+            </div>
+            <div style="color:var(--text-secondary);margin-top:1px;">${escHtml(f.detail)}</div>
+            <div style="font-size:10px;color:var(--text-tertiary);margin-top:2px;">
+                ${f.spec_section ? `Spec: ${escHtml(f.spec_section)}` : ''}
+                ${f.clause_reference ? ` | Clause: ${escHtml(f.clause_reference)}` : ''}
+                ${f.source_document ? ` | Doc: ${escHtml(f.source_document)}` : ''}
+            </div>
+        </div>`;
+    });
+
+    html += '</div>';
+    return html;
 }
 
 // ── Init ──

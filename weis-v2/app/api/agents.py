@@ -9,7 +9,12 @@ import json
 import logging
 from typing import Optional
 
+import asyncio
+import queue
+import threading
+
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.database import get_connection
@@ -114,6 +119,64 @@ async def analyze_bid_single(bid_id: int, agent_name: str):
         "tokens_used": report.tokens_used,
         "summary": report.summary_text,
     }
+
+
+@router.get("/bids/{bid_id}/analyze-stream")
+async def analyze_bid_stream(bid_id: int):
+    """Run all agents with SSE progress streaming."""
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT id FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+        doc_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bid_documents WHERE bid_id = ? AND extraction_status = 'complete'",
+            (bid_id,),
+        ).fetchone()["cnt"]
+        if doc_count == 0:
+            raise HTTPException(status_code=400, detail="No documents with extracted text.")
+        chunk_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bid_document_chunks WHERE bid_id = ?",
+            (bid_id,),
+        ).fetchone()["cnt"]
+    finally:
+        conn.close()
+
+    if chunk_count == 0:
+        chunk_all_bid_documents(bid_id)
+
+    progress_queue = queue.Queue()
+
+    def on_progress(current, total, agent_name, status):
+        progress_queue.put({"type": "progress", "current": current, "total": total, "agent": agent_name, "status": status})
+
+    def run_agents():
+        try:
+            result = run_all_agents(bid_id, on_progress=on_progress)
+            progress_queue.put({"type": "done", "result": result})
+        except Exception as e:
+            progress_queue.put({"type": "error", "message": str(e)})
+
+    thread = threading.Thread(target=run_agents, daemon=True)
+    thread.start()
+
+    async def event_stream():
+        while True:
+            try:
+                msg = progress_queue.get_nowait()
+                yield f"data: {json.dumps(msg)}\n\n"
+                if msg["type"] in ("done", "error"):
+                    return
+            except queue.Empty:
+                # Send heartbeat to keep connection alive during long agent runs
+                yield ": heartbeat\n\n"
+                await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Reports ─────────────────────────────────────────────────────

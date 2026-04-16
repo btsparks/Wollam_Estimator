@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.12"
+SCHEMA_VERSION = "2.15"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -1394,6 +1394,105 @@ def _migrate_2_11_to_2_12(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.12'")
 
 
+def _migrate_2_12_to_2_13(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.12 to 2.13: SOV Intelligence Mapper.
+
+    Changes:
+    1. Add sov_item_intelligence table — maps agent findings to individual SOV items
+    2. Add drawing_log table — catalog of drawings referenced in bid documents
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS sov_item_intelligence (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            bid_id              INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+            sov_item_id         INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+            agent_name          TEXT NOT NULL,
+            domain              TEXT NOT NULL,
+            finding_type        TEXT NOT NULL,
+            title               TEXT NOT NULL,
+            detail              TEXT NOT NULL,
+            severity            TEXT,
+            spec_section        TEXT,
+            clause_reference    TEXT,
+            source_document     TEXT,
+            source_addendum     INTEGER,
+            confidence          REAL DEFAULT 1.0,
+            metadata_json       TEXT,
+            mapped_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+            is_stale            INTEGER DEFAULT 0,
+            created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sov_intel_bid ON sov_item_intelligence(bid_id);
+        CREATE INDEX IF NOT EXISTS idx_sov_intel_item ON sov_item_intelligence(sov_item_id);
+        CREATE INDEX IF NOT EXISTS idx_sov_intel_agent ON sov_item_intelligence(agent_name);
+        CREATE INDEX IF NOT EXISTS idx_sov_intel_domain ON sov_item_intelligence(domain);
+
+        CREATE TABLE IF NOT EXISTS drawing_log (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            bid_id              INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+            drawing_number      TEXT NOT NULL,
+            title               TEXT,
+            revision            TEXT,
+            discipline          TEXT,
+            source_document     TEXT,
+            source_addendum     INTEGER,
+            added_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_drawing_log_bid ON drawing_log(bid_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_drawing_log_unique ON drawing_log(bid_id, drawing_number);
+    """)
+
+    conn.execute("UPDATE schema_version SET version = '2.13'")
+
+
+def _migrate_2_13_to_2_14(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.13 to 2.14: API usage tracking.
+
+    Changes:
+    1. Add api_usage_log table — tracks every Anthropic API call per bid
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS api_usage_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            bid_id          INTEGER REFERENCES active_bids(id) ON DELETE CASCADE,
+            operation       TEXT NOT NULL,
+            model           TEXT,
+            input_tokens    INTEGER DEFAULT 0,
+            output_tokens   INTEGER DEFAULT 0,
+            total_tokens    INTEGER DEFAULT 0,
+            cost_usd        REAL DEFAULT 0,
+            detail          TEXT,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_api_usage_bid ON api_usage_log(bid_id);
+        CREATE INDEX IF NOT EXISTS idx_api_usage_op ON api_usage_log(operation);
+    """)
+
+    conn.execute("UPDATE schema_version SET version = '2.14'")
+
+
+def _migrate_2_14_to_2_15(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.14 to 2.15: SOV item scope toggle.
+
+    Changes:
+    1. Add in_scope column to bid_sov_item — 1 = in scope (default), 0 = out of scope
+    """
+    for stmt in [
+        "ALTER TABLE bid_sov_item ADD COLUMN in_scope INTEGER DEFAULT 1",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    conn.execute("UPDATE schema_version SET version = '2.15'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1477,6 +1576,15 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.11"
             if current == "2.11":
                 _migrate_2_11_to_2_12(conn)
+                current = "2.12"
+            if current == "2.12":
+                _migrate_2_12_to_2_13(conn)
+                current = "2.13"
+            if current == "2.13":
+                _migrate_2_13_to_2_14(conn)
+                current = "2.14"
+            if current == "2.14":
+                _migrate_2_14_to_2_15(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

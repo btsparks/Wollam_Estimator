@@ -373,6 +373,13 @@ def sync_bid_documents(bid_id: int, on_progress=None) -> dict:
                     logger.info("Marked %d agent report(s) stale for bid %d", stale_count, bid_id)
             except Exception as e:
                 logger.warning("Failed to mark reports stale: %s", e)
+            try:
+                from app.services.sov_mapper import mark_sov_intelligence_stale
+                sov_stale = mark_sov_intelligence_stale(bid_id)
+                if sov_stale:
+                    logger.info("Marked %d SOV intelligence finding(s) stale for bid %d", sov_stale, bid_id)
+            except Exception as e:
+                logger.warning("Failed to mark SOV intelligence stale: %s", e)
 
         # Update bid sync metadata
         conn.execute(

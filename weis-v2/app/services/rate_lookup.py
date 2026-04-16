@@ -239,7 +239,7 @@ def auto_populate_sov_rates(bid_id: int) -> dict:
     try:
         items = conn.execute(
             """SELECT id, description, unit, quantity, unit_price, mapped_by
-               FROM bid_sov_item WHERE bid_id = ?
+               FROM bid_sov_item WHERE bid_id = ? AND COALESCE(in_scope, 1) = 1
                ORDER BY sort_order""",
             (bid_id,),
         ).fetchall()

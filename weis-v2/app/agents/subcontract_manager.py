@@ -54,14 +54,26 @@ Return your analysis as a JSON object with this exact structure:
       "sov_items": ["1", "2"]
     }
   ],
+  "missing_information": [
+    {
+      "what_is_missing": "Description of missing or ambiguous scope information",
+      "why_it_matters": "Impact on estimating if not resolved",
+      "affected_sov_items": ["15", "16"],
+      "suggested_action": "rfi|clarification|verify|assumption",
+      "suggested_question": "Suggested question for the owner"
+    }
+  ],
   "flags": ["MBE/WBE requirements", "Pre-qualification requirements for subs", "etc."]
 }
 
 Rules:
 - Always reference specific SOV items and spec sections
+- Use EXACT item numbers from the provided Schedule of Values for all sov_items references
+- Every recommended sub scope and self-perform scope MUST reference specific SOV items
 - estimated_value_pct is a rough estimate of that scope's share of total bid
 - Include flow_down_items that affect subcontractor pricing (LDs, retainage, bonding, insurance)
 - Flag any diversity requirements (MBE/WBE/DBE), pre-qualification, or licensing
+- For missing_information, identify: scope boundaries that are unclear between disciplines (e.g., who provides concrete embeds for electrical?), quantities that are not provided for sub-bid items, spec sections referenced but not included in the package, diversity/DBE requirements that are mentioned without specific percentages, and any pre-qualification requirements that need clarification
 - Return ONLY valid JSON — no markdown, no explanation
 """
 
@@ -123,5 +135,6 @@ class SubcontractManagerAgent(BaseAgent):
         return {
             "recommended_sub_scopes": [],
             "self_perform_recommended": [],
+            "missing_information": [],
             "flags": [],
         }

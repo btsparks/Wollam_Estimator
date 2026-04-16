@@ -569,6 +569,12 @@ html, body {
     to { transform: rotate(360deg); }
 }
 
+@keyframes progressIndeterminate {
+    0% { margin-left: 0; }
+    50% { margin-left: 70%; }
+    100% { margin-left: 0; }
+}
+
 /* ── Document Upload Section ── */
 .doc-section {
     background: rgba(14, 165, 233, 0.04);

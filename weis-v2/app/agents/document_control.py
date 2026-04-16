@@ -24,7 +24,7 @@ Return your analysis as a JSON object with this exact structure:
       "filename": "...",
       "category": "spec|drawing|contract|bid_schedule|addendum_package|general",
       "sections": ["Section 03300 - Cast-in-Place Concrete", ...],
-      "relevance_to_sov": ["Relates to SOV item 3", ...]
+      "relevance_to_sov": ["3", "7"]
     }
   ],
   "addendum_changes": [
@@ -37,6 +37,15 @@ Return your analysis as a JSON object with this exact structure:
     }
   ],
   "missing_documents": ["No geotechnical report found", ...],
+  "missing_information": [
+    {
+      "what_is_missing": "Description of missing document or information",
+      "why_it_matters": "Impact on estimating if not resolved",
+      "affected_sov_items": ["3", "7"],
+      "suggested_action": "rfi|clarification|verify|assumption",
+      "suggested_question": "Suggested RFI question or clarification request to send to the owner"
+    }
+  ],
   "flags": ["List of any concerns or items needing attention"]
 }
 
@@ -44,6 +53,11 @@ Rules:
 - Be specific about section numbers and spec references
 - Only flag documents as missing if they are explicitly referenced in other documents
 - For addendum changes, focus on scope changes that affect pricing
+- When mapping to SOV items, use the EXACT item numbers from the provided Schedule of Values
+- Every document section should be mapped to at least one SOV item where possible
+- For missing_information, think like an estimator preparing to price this work: what questions would you need answered? What data is missing that would change the price?
+- Distinguish between truly missing documents (missing_documents) and missing/ambiguous information within existing documents (missing_information)
+- For each missing item, write a specific suggested_question that could be sent directly to the owner as an RFI
 - Return ONLY valid JSON — no markdown, no explanation
 """
 
@@ -97,5 +111,6 @@ class DocumentControlAgent(BaseAgent):
             "document_index": [],
             "addendum_changes": [],
             "missing_documents": [],
+            "missing_information": [],
             "flags": [],
         }

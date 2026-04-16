@@ -251,8 +251,11 @@ def run_agent(bid_id: int, agent_name: str) -> AgentReport:
     return report
 
 
-def run_all_agents(bid_id: int, agent_names: list[str] | None = None) -> dict:
+def run_all_agents(bid_id: int, agent_names: list[str] | None = None, on_progress=None) -> dict:
     """Run specified agents (or all) against a bid's documents.
+
+    Args:
+        on_progress: Optional callback(current, total, agent_name, status) for progress tracking.
 
     Returns summary dict with per-agent results.
     """
@@ -262,20 +265,28 @@ def run_all_agents(bid_id: int, agent_names: list[str] | None = None) -> dict:
         n for n in _AGENT_REGISTRY if n != "chief_estimator"
     ]
 
+    # Include chief estimator in total count
+    include_chief = agent_names is None or "chief_estimator" in (agent_names or [])
+    total = len(names) + (1 if include_chief else 0)
+
     context = _load_bid_context(bid_id)
 
     results = {}
-    for name in names:
+    for i, name in enumerate(names):
         agent = _AGENT_REGISTRY.get(name)
         if not agent:
             results[name] = {"status": "error", "error": f"Unknown agent: {name}"}
             continue
+
+        if on_progress:
+            on_progress(i + 1, total, agent.display_name, "running")
 
         # Each agent gets its own chunk selection (vector search is domain-specific)
         chunks = _load_doc_chunks_smart(bid_id, agent)
         logger.info("Running agent %s on bid %d (%d chunks)", name, bid_id, len(chunks))
         report = agent.run(bid_id, chunks, context)
         _save_report(bid_id, report)
+        _log_agent_cost(bid_id, name, report)
         results[name] = {
             "status": report.status,
             "risk_rating": report.risk_rating,
@@ -286,12 +297,15 @@ def run_all_agents(bid_id: int, agent_names: list[str] | None = None) -> dict:
         }
 
     # Run chief estimator last if requested or running all
-    if agent_names is None or "chief_estimator" in (agent_names or []):
+    if include_chief:
         chief = _AGENT_REGISTRY.get("chief_estimator")
         if chief:
+            if on_progress:
+                on_progress(total, total, chief.display_name, "running")
             logger.info("Running chief_estimator aggregation for bid %d", bid_id)
             report = chief.run(bid_id, [], context)  # Aggregator reads sub-agent reports, not chunks
             _save_report(bid_id, report)
+            _log_agent_cost(bid_id, "chief_estimator", report)
             results["chief_estimator"] = {
                 "status": report.status,
                 "risk_rating": report.risk_rating,
@@ -301,7 +315,33 @@ def run_all_agents(bid_id: int, agent_names: list[str] | None = None) -> dict:
                 "summary": report.summary_text,
             }
 
+    # Mark existing SOV intelligence as stale since agent reports have changed
+    try:
+        from app.services.sov_mapper import mark_sov_intelligence_stale
+        mark_sov_intelligence_stale(bid_id)
+    except Exception:
+        pass  # Table may not exist pre-migration
+
     return {"bid_id": bid_id, "agents": results}
+
+
+def _log_agent_cost(bid_id: int, agent_name: str, report) -> None:
+    """Log agent API usage to the cost tracker."""
+    if not report.tokens_used:
+        return
+    try:
+        from app.services.cost_tracker import log_api_call
+        # Agents use ~80% input, 20% output tokens (rough split)
+        total = report.tokens_used
+        log_api_call(
+            bid_id=bid_id,
+            operation=f"agent:{agent_name}",
+            input_tokens=int(total * 0.8),
+            output_tokens=int(total * 0.2),
+            detail=f"{agent_name} analysis ({report.duration_seconds:.0f}s)",
+        )
+    except Exception:
+        pass
 
 
 def mark_reports_stale(bid_id: int) -> int:

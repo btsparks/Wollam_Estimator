@@ -97,6 +97,12 @@ class SOVItemUpdate(BaseModel):
     unit: Optional[str] = None
     notes: Optional[str] = None
     pricing_group_id: Optional[int] = None
+    in_scope: Optional[int] = None
+
+
+class SOVScopeUpdate(BaseModel):
+    item_ids: list[int]
+    in_scope: int  # 1 or 0
 
 
 class SOVConfirm(BaseModel):
@@ -1028,6 +1034,22 @@ async def reorder_sov(body: ReorderRequest):
             )
         conn.commit()
         return {"reordered": len(body.item_ids)}
+    finally:
+        conn.close()
+
+
+@router.post("/bids/{bid_id}/sov/set-scope")
+async def set_sov_scope(bid_id: int, body: SOVScopeUpdate):
+    """Set in_scope flag for multiple SOV items at once."""
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" for _ in body.item_ids)
+        conn.execute(
+            f"UPDATE bid_sov_item SET in_scope = ?, updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+            [body.in_scope] + body.item_ids,
+        )
+        conn.commit()
+        return {"updated": len(body.item_ids), "in_scope": body.in_scope}
     finally:
         conn.close()
 

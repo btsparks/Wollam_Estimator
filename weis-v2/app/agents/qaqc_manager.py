@@ -37,7 +37,8 @@ Return your analysis as a JSON object with this exact structure:
     {
       "item": "Description (e.g., Concrete mix design)",
       "spec_section": "Spec section reference",
-      "advance_days": <number of days before work or null>
+      "advance_days": <number of days before work or null>,
+      "affected_sov_items": ["3", "4"]
     }
   ],
   "inspection_requirements": [
@@ -45,7 +46,17 @@ Return your analysis as a JSON object with this exact structure:
       "inspection": "Description",
       "spec_section": "Reference",
       "who_performs": "Owner inspector|Third party|Contractor QC",
-      "at_whose_expense": "Owner|Contractor"
+      "at_whose_expense": "Owner|Contractor",
+      "affected_sov_items": ["3"]
+    }
+  ],
+  "missing_information": [
+    {
+      "what_is_missing": "Description of missing or ambiguous QA/QC requirement",
+      "why_it_matters": "Impact on estimating if not resolved",
+      "affected_sov_items": ["3", "7"],
+      "suggested_action": "rfi|clarification|verify|assumption",
+      "suggested_question": "Suggested question for the owner"
     }
   ],
   "flags": ["Items needing attention — especially cost-impacting items like third-party testing at contractor expense"]
@@ -57,6 +68,10 @@ Rules:
 - For testing frequency, use exact language from the specs
 - For cost_impact, consider testing labor, equipment, and material costs
 - Flag anything where the contractor bears testing/inspection costs
+- For affected_sov_items, use EXACT item numbers from the provided Schedule of Values
+- A testing requirement that applies broadly should list ALL affected SOV items, not just one
+- Map submittals and inspections to SOV items as well
+- For missing_information, identify: testing requirements that are referenced but not fully specified (e.g., "testing per applicable standards" without naming the standard), certifications mentioned without specifying the required level, inspection procedures that don't clarify who pays, and any QA/QC requirements that are ambiguous enough to affect pricing
 - Return ONLY valid JSON — no markdown, no explanation
 """
 
@@ -115,5 +130,6 @@ class QAQCManagerAgent(BaseAgent):
             "certifications_required": [],
             "submittals_required": [],
             "inspection_requirements": [],
+            "missing_information": [],
             "flags": [],
         }
