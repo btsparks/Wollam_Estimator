@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.16"
+SCHEMA_VERSION = "2.17"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -1567,6 +1567,81 @@ def _migrate_2_15_to_2_16(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.16'")
 
 
+def _migrate_2_16_to_2_17(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.16 to 2.17: Documents Part B.
+
+    Changes:
+    1. Create drawing_register table
+    2. Create spec_register table
+    3. Create rfi_log table
+    """
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS drawing_register (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id            INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+        document_id       INTEGER REFERENCES bid_documents(id) ON DELETE SET NULL,
+        drawing_number    TEXT NOT NULL,
+        title             TEXT,
+        discipline        TEXT,
+        revision          TEXT DEFAULT '0',
+        sheet_count       INTEGER DEFAULT 1,
+        addendum_number   INTEGER DEFAULT 0,
+        date_received     DATE,
+        previous_revision TEXT,
+        is_new            INTEGER DEFAULT 1,
+        is_revised        INTEGER DEFAULT 0,
+        notes             TEXT,
+        ai_generated      INTEGER DEFAULT 1,
+        created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_drawing_reg_bid ON drawing_register(bid_id);
+
+    CREATE TABLE IF NOT EXISTS spec_register (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id            INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+        document_id       INTEGER REFERENCES bid_documents(id) ON DELETE SET NULL,
+        spec_section      TEXT NOT NULL,
+        title             TEXT,
+        division          TEXT,
+        addendum_number   INTEGER DEFAULT 0,
+        date_received     DATE,
+        is_new            INTEGER DEFAULT 1,
+        is_revised        INTEGER DEFAULT 0,
+        revision_summary  TEXT,
+        notes             TEXT,
+        ai_generated      INTEGER DEFAULT 1,
+        created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_spec_reg_bid ON spec_register(bid_id);
+
+    CREATE TABLE IF NOT EXISTS rfi_log (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id            INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+        document_id       INTEGER REFERENCES bid_documents(id) ON DELETE SET NULL,
+        rfi_number        TEXT,
+        question          TEXT NOT NULL,
+        asked_by          TEXT,
+        date_asked        DATE,
+        response          TEXT,
+        responded_by      TEXT,
+        date_responded    DATE,
+        addendum_number   INTEGER,
+        related_spec      TEXT,
+        related_drawing   TEXT,
+        status            TEXT DEFAULT 'answered',
+        notes             TEXT,
+        ai_generated      INTEGER DEFAULT 1,
+        created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_rfi_log_bid ON rfi_log(bid_id);
+    """)
+
+    conn.execute("UPDATE schema_version SET version = '2.17'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1662,6 +1737,9 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.15"
             if current == "2.15":
                 _migrate_2_15_to_2_16(conn)
+                current = "2.16"
+            if current == "2.16":
+                _migrate_2_16_to_2_17(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

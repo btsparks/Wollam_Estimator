@@ -30,6 +30,7 @@ const state = {
     biddingStatusFilter: 'all',
     biddingTab: 'overview',
     biddingSovPreview: null,
+    docSubTab: 'explorer',
 };
 
 // ── API Helpers ──
@@ -3776,91 +3777,444 @@ async function bulkSetWorkType(bidId, workType) {
 async function renderBidDocuments(bid) {
     const bidId = bid.id;
     const tc = document.getElementById('bidTabContent');
-    tc.innerHTML = '<div class="empty-state"><p>Loading documents...</p></div>';
+    const docTab = state.docSubTab || 'explorer';
+
+    tc.innerHTML = `
+        <div class="filter-tabs" style="margin-bottom:16px;font-size:12px;">
+            <button class="filter-tab ${docTab === 'explorer' ? 'active' : ''}" onclick="state.docSubTab='explorer';renderBidDocuments(window._currentBid)">File Explorer</button>
+            <button class="filter-tab ${docTab === 'registers' ? 'active' : ''}" onclick="state.docSubTab='registers';renderBidDocuments(window._currentBid)">Drawings & Specs</button>
+            <button class="filter-tab ${docTab === 'rfi' ? 'active' : ''}" onclick="state.docSubTab='rfi';renderBidDocuments(window._currentBid)">RFI & Clarifications</button>
+        </div>
+        <div id="docSubContent"></div>
+    `;
+    window._currentBid = bid;
+
+    if (docTab === 'explorer') renderDocExplorer(bid);
+    else if (docTab === 'registers') renderDocRegisters(bid);
+    else if (docTab === 'rfi') renderDocRFI(bid);
+}
+
+function formatFileSize(bytes) {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function renderDocExplorer(bid) {
+    const bidId = bid.id;
+    const sc = document.getElementById('docSubContent');
+    sc.innerHTML = '<div class="empty-state"><p>Loading documents...</p></div>';
 
     try {
-        const docs = await api(`/bidding/bids/${bidId}/documents`);
+        const treeData = await api(`/bidding/bids/${bidId}/documents/tree`);
         const hasFolder = !!bid.dropbox_folder_path;
-        const lastSynced = bid.last_synced_at
-            ? new Date(bid.last_synced_at).toLocaleString()
-            : 'Never synced';
+        const lastSynced = bid.last_synced_at ? new Date(bid.last_synced_at).toLocaleString() : 'Never synced';
+        const stats = treeData.stats || {};
 
-        // Group by addendum
-        const addendums = {};
-        docs.forEach(d => {
-            const key = d.addendum_number || 0;
-            if (!addendums[key]) addendums[key] = [];
-            addendums[key].push(d);
-        });
-        const sortedKeys = Object.keys(addendums).sort((a, b) => Number(a) - Number(b));
-
-        tc.innerHTML = `
-            ${hasFolder ? `
-            <!-- Sync Controls -->
-            <div class="card" style="padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;">
+        sc.innerHTML = `
+            <!-- Toolbar -->
+            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+                ${hasFolder ? `
                 <button class="btn btn-primary btn-sm" id="syncDropboxBtn" onclick="syncFromDropbox(${bidId})" style="display:flex;align-items:center;gap:6px;">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                     Sync from Dropbox
                 </button>
-                <span style="font-size:11px;color:var(--text-tertiary);">Last synced: ${escHtml(lastSynced)}</span>
-                <div id="syncResult" style="flex:1;"></div>
+                <span style="font-size:11px;color:var(--text-tertiary);">Last: ${escHtml(lastSynced)}</span>
+                ` : ''}
+                <div style="flex:1;"></div>
+                <input type="text" id="docSearchInput" class="search-input" placeholder="Search files..." style="width:200px;font-size:12px;" oninput="filterDocTree(this.value)">
+                <button class="btn btn-sm" onclick="toggleAllDocFolders(true)">Expand All</button>
+                <button class="btn btn-sm" onclick="toggleAllDocFolders(false)">Collapse All</button>
             </div>
-            ` : ''}
+            <div id="syncResult"></div>
 
-            <!-- Upload Zone (collapsible if folder linked) -->
+            <!-- Summary -->
+            <div style="margin-bottom:12px;font-size:12px;color:var(--text-secondary);">
+                ${stats.total_documents || 0} documents${stats.new_since_last_sync ? ` &middot; <span style="color:var(--success-green);font-weight:600;">${stats.new_since_last_sync} new</span>` : ''}${stats.updated_since_last_sync ? ` &middot; <span style="color:#f59e0b;font-weight:600;">${stats.updated_since_last_sync} updated</span>` : ''}
+            </div>
+
             ${hasFolder ? `
-            <details style="margin-bottom:16px;">
-                <summary style="font-size:12px;color:var(--text-tertiary);cursor:pointer;margin-bottom:8px;">Manual upload (for files not in Dropbox)</summary>
-            ` : ''}
-            <div class="card" style="padding:20px;margin-bottom:16px;border:2px dashed var(--border-strong);text-align:center;cursor:pointer;background:var(--bg-hover);"
+            <details style="margin-bottom:12px;">
+                <summary style="font-size:11px;color:var(--text-tertiary);cursor:pointer;">Manual upload</summary>
+                <div class="card" style="padding:16px;margin-top:8px;border:2px dashed var(--border-strong);text-align:center;cursor:pointer;background:var(--bg-hover);" onclick="triggerDocUpload(${bidId})"
+                     ondragover="event.preventDefault();this.style.borderColor='var(--wollam-navy)';"
+                     ondragleave="this.style.borderColor='var(--border-strong)';"
+                     ondrop="handleDocDrop(event, ${bidId});this.style.borderColor='var(--border-strong)';">
+                    <p style="margin:0;font-size:12px;color:var(--text-secondary);">Drag files here or click to upload</p>
+                </div>
+            </details>
+            ` : `
+            <div class="card" style="padding:16px;margin-bottom:12px;border:2px dashed var(--border-strong);text-align:center;cursor:pointer;background:var(--bg-hover);"
                  onclick="triggerDocUpload(${bidId})"
                  ondragover="event.preventDefault();this.style.borderColor='var(--wollam-navy)';"
                  ondragleave="this.style.borderColor='var(--border-strong)';"
                  ondrop="handleDocDrop(event, ${bidId});this.style.borderColor='var(--border-strong)';">
-                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                <p style="margin:0;font-size:13px;color:var(--text-secondary);">Drag files here or click to upload</p>
-                <p style="margin:4px 0 0;font-size:11px;color:var(--text-tertiary);">PDF, Excel, Word, CSV, TXT</p>
+                <p style="margin:0;font-size:12px;color:var(--text-secondary);">Drag files here or click to upload</p>
             </div>
-            ${hasFolder ? '</details>' : ''}
+            `}
 
             <input type="file" id="docFileInput" style="display:none;" multiple accept=".pdf,.xlsx,.xls,.csv,.txt,.docx,.doc" onchange="uploadDocFiles(this.files, ${bidId})">
-
-            <!-- Upload metadata form (shown during upload) -->
             <div id="docUploadMeta" style="display:none;"></div>
 
-            <!-- Document list by addendum -->
-            ${docs.length === 0 ? '<div class="empty-state"><p>No documents yet. ' + (hasFolder ? 'Click "Sync from Dropbox" to import.' : 'Upload files or link a Dropbox folder.') + '</p></div>' : ''}
-            ${sortedKeys.map(key => `
-                <div style="margin-bottom:16px;">
-                    <h4 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin:0 0 8px;">
-                        ${key === '0' ? 'Original Package' : `Addendum ${key}`}
-                        <span style="font-weight:400;color:var(--text-tertiary);"> (${addendums[key].length} docs)</span>
-                    </h4>
-                    ${addendums[key].map(doc => `
-                        <div class="card" style="padding:12px;margin-bottom:6px;${doc.sync_action === 'removed' ? 'opacity:0.5;' : ''}">
-                            <div style="display:flex;align-items:center;gap:8px;">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                                <span style="flex:1;font-size:13px;font-weight:500;">${escHtml(doc.filename)}</span>
-                                ${syncActionBadge(doc.sync_action)}
-                                ${!doc.dropbox_path && doc.sync_action == null ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--bg-hover);color:var(--text-tertiary);">Manual</span>' : ''}
-                                ${docCategoryBadge(doc.doc_category)}
-                                ${doc.date_received ? `<span style="font-size:11px;color:var(--text-tertiary);">Received: ${doc.date_received}</span>` : ''}
-                                <span style="font-size:11px;color:var(--text-tertiary);">${doc.word_count ? fmt(doc.word_count) + ' words' : ''}</span>
-                                <button onclick="toggleDocDetail(${doc.id})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);padding:2px;" title="Details">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                                </button>
-                                <button onclick="deleteDoc(${doc.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);padding:2px;" title="Delete">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                </button>
-                            </div>
-                            <div id="doc-detail-${doc.id}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-default);"></div>
-                        </div>
-                    `).join('')}
-                </div>
-            `).join('')}
+            <!-- File Tree -->
+            <div id="docTree">
+            ${treeData.tree.length === 0 ? '<div class="empty-state"><p>No documents yet.</p></div>' :
+                treeData.tree.map(folder => renderDocFolder(folder, bidId)).join('')}
+            </div>
         `;
     } catch (err) {
-        tc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+        sc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function renderDocFolder(folder, bidId) {
+    const folderId = 'doc-folder-' + (folder.path || 'root').replace(/[^a-zA-Z0-9]/g, '_');
+    const nameStyle = (folder.has_new || folder.has_updated) ? 'font-weight:600;' : '';
+    const newDot = folder.has_new ? '<span style="width:6px;height:6px;border-radius:50%;background:var(--success-green);display:inline-block;margin-left:4px;"></span>' : '';
+    const updDot = folder.has_updated ? '<span style="width:6px;height:6px;border-radius:50%;background:#f59e0b;display:inline-block;margin-left:4px;"></span>' : '';
+
+    return `
+    <div class="doc-folder" style="margin-bottom:4px;">
+        <div onclick="document.getElementById('${folderId}').style.display = document.getElementById('${folderId}').style.display === 'none' ? 'block' : 'none'; this.querySelector('.folder-chevron').textContent = document.getElementById('${folderId}').style.display === 'none' ? '▶' : '▼';"
+             style="padding:6px 10px;background:var(--bg-hover);border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;gap:6px;">
+            <span class="folder-chevron" style="font-size:10px;color:var(--text-tertiary);">&#9660;</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="var(--wollam-gold)" stroke="var(--wollam-gold-dark)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span style="font-size:13px;color:var(--text-primary);${nameStyle}">${escHtml(folder.name || 'Root')}</span>
+            <span style="font-size:10px;color:var(--text-tertiary);">(${folder.doc_count})</span>
+            ${newDot}${updDot}
+        </div>
+        <div id="${folderId}" style="padding-left:20px;margin-top:2px;">
+            ${(folder.children || []).map(doc => renderDocRow(doc, bidId)).join('')}
+        </div>
+    </div>`;
+}
+
+function renderDocRow(doc, bidId) {
+    const isNew = doc.sync_action === 'new';
+    const isUpdated = doc.sync_action === 'updated';
+    const isRemoved = doc.sync_action === 'removed';
+    const borderColor = isNew ? 'var(--success-green)' : isUpdated ? '#f59e0b' : isRemoved ? 'var(--danger-red)' : 'transparent';
+    const bgTint = isNew ? 'rgba(22,163,74,0.04)' : isUpdated ? 'rgba(245,158,11,0.04)' : '';
+    const textStyle = isRemoved ? 'text-decoration:line-through;color:var(--text-tertiary);' : '';
+    const fileLink = doc.dropbox_url
+        ? `<a href="${escAttr(doc.dropbox_url)}" target="_blank" style="font-size:13px;font-weight:500;color:var(--text-primary);text-decoration:none;${textStyle}" title="Open file">${escHtml(doc.filename)}</a>`
+        : `<span style="font-size:13px;font-weight:500;${textStyle}">${escHtml(doc.filename)}</span>`;
+
+    return `
+    <div class="doc-row" data-filename="${escAttr(doc.filename.toLowerCase())}" style="padding:6px 10px;margin-bottom:2px;border-left:3px solid ${borderColor};background:${bgTint};border-radius:0 var(--radius-sm) var(--radius-sm) 0;display:flex;align-items:center;gap:8px;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        ${fileLink}
+        ${isNew ? '<span class="badge" style="background:var(--success-green);color:white;font-size:9px;padding:1px 5px;">NEW</span>' : ''}
+        ${isUpdated ? '<span class="badge" style="background:#f59e0b;color:white;font-size:9px;padding:1px 5px;">UPDATED</span>' : ''}
+        ${docCategoryBadge(doc.doc_category)}
+        ${doc.addendum_number > 0 ? `<span style="font-size:10px;color:var(--text-tertiary);">Add. ${doc.addendum_number}</span>` : ''}
+        ${doc.date_received ? `<span style="font-size:10px;color:var(--text-tertiary);">${doc.date_received}</span>` : ''}
+        <span style="font-size:10px;color:var(--text-tertiary);margin-left:auto;">${formatFileSize(doc.file_size_bytes)}</span>
+        <button onclick="deleteDoc(${doc.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);padding:2px;font-size:11px;" title="Delete">&times;</button>
+    </div>`;
+}
+
+function filterDocTree(query) {
+    const q = query.toLowerCase().trim();
+    document.querySelectorAll('.doc-row').forEach(row => {
+        const fn = row.getAttribute('data-filename') || '';
+        row.style.display = !q || fn.includes(q) ? '' : 'none';
+    });
+}
+
+function toggleAllDocFolders(expand) {
+    document.querySelectorAll('.doc-folder > div:last-child').forEach(el => { el.style.display = expand ? 'block' : 'none'; });
+    document.querySelectorAll('.folder-chevron').forEach(el => { el.textContent = expand ? '▼' : '▶'; });
+}
+
+// ── Drawings & Specs Register ──
+
+async function renderDocRegisters(bid) {
+    const bidId = bid.id;
+    const sc = document.getElementById('docSubContent');
+    sc.innerHTML = '<div class="empty-state"><p>Loading registers...</p></div>';
+
+    try {
+        const [drawings, specs] = await Promise.all([
+            api(`/bidding/bids/${bidId}/drawing-register`),
+            api(`/bidding/bids/${bidId}/spec-register`),
+        ]);
+
+        const drawingNew = drawings.filter(d => d.is_new).length;
+        const drawingRevised = drawings.filter(d => d.is_revised).length;
+        const specNew = specs.filter(s => s.is_new).length;
+
+        sc.innerHTML = `
+            <!-- Status bar -->
+            <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+                <button class="btn btn-sm" onclick="rebuildRegisters(${bidId})" id="rebuildRegBtn">Rebuild from Documents</button>
+                <button class="btn btn-sm" onclick="window.open('/api/bidding/bids/${bidId}/drawing-register/export','_blank')">Export Drawings</button>
+                <button class="btn btn-sm" onclick="window.open('/api/bidding/bids/${bidId}/spec-register/export','_blank')">Export Specs</button>
+                <div style="flex:1;"></div>
+                <span style="font-size:12px;color:var(--text-secondary);">
+                    ${drawings.length} drawings${drawingNew ? ` (<span style="color:var(--success-green);">${drawingNew} new</span>)` : ''}${drawingRevised ? ` (<span style="color:#f59e0b;">${drawingRevised} revised</span>)` : ''}
+                    &middot; ${specs.length} spec sections${specNew ? ` (<span style="color:var(--success-green);">${specNew} new</span>)` : ''}
+                </span>
+            </div>
+            <div id="rebuildProgress"></div>
+
+            <!-- Drawing Register -->
+            <h4 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 8px;">Drawing Register</h4>
+            ${drawings.length === 0 ? '<div class="empty-state" style="padding:20px;"><p>No drawings registered yet. Click "Rebuild from Documents" to scan.</p></div>' : `
+            <div class="card" style="padding:0;overflow-x:auto;margin-bottom:20px;">
+                <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead>
+                        <tr style="background:var(--bg-hover);border-bottom:2px solid var(--border-default);">
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Drawing #</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Title</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Discipline</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);">Rev</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);">Add.</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Received</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${drawings.map(d => `
+                        <tr style="border-bottom:1px solid var(--border-default);">
+                            <td style="padding:6px 10px;font-family:monospace;font-weight:500;">${escHtml(d.drawing_number)}</td>
+                            <td style="padding:6px 10px;">${escHtml(d.title || '—')}</td>
+                            <td style="padding:6px 10px;color:var(--text-secondary);">${escHtml(d.discipline || '—')}</td>
+                            <td style="padding:6px 10px;text-align:center;font-family:monospace;">${escHtml(d.revision || '0')}${d.previous_revision ? ` <span style="font-size:10px;color:var(--text-tertiary);" title="Was Rev ${escAttr(d.previous_revision)}">&#8592;${escHtml(d.previous_revision)}</span>` : ''}</td>
+                            <td style="padding:6px 10px;text-align:center;">${d.addendum_number || 0}</td>
+                            <td style="padding:6px 10px;color:var(--text-tertiary);font-size:11px;">${d.date_received || '—'}</td>
+                            <td style="padding:6px 10px;text-align:center;">
+                                ${d.is_new ? '<span class="badge" style="background:var(--success-green);color:white;font-size:9px;padding:1px 5px;">NEW</span>' : ''}
+                                ${d.is_revised ? '<span class="badge" style="background:#f59e0b;color:white;font-size:9px;padding:1px 5px;">REVISED</span>' : ''}
+                                ${!d.is_new && !d.is_revised ? '<span style="color:var(--text-tertiary);font-size:10px;">—</span>' : ''}
+                            </td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>`}
+
+            <!-- Spec Register -->
+            <h4 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 8px;">Spec Register</h4>
+            ${specs.length === 0 ? '<div class="empty-state" style="padding:20px;"><p>No specs registered yet. Click "Rebuild from Documents" to scan.</p></div>' : `
+            <div class="card" style="padding:0;overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead>
+                        <tr style="background:var(--bg-hover);border-bottom:2px solid var(--border-default);">
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Section #</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Title</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Division</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);">Add.</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Received</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${specs.map(s => `
+                        <tr style="border-bottom:1px solid var(--border-default);">
+                            <td style="padding:6px 10px;font-family:monospace;font-weight:500;">${escHtml(s.spec_section)}</td>
+                            <td style="padding:6px 10px;">${escHtml(s.title || '—')}</td>
+                            <td style="padding:6px 10px;color:var(--text-secondary);">${escHtml(s.division || '—')}</td>
+                            <td style="padding:6px 10px;text-align:center;">${s.addendum_number || 0}</td>
+                            <td style="padding:6px 10px;color:var(--text-tertiary);font-size:11px;">${s.date_received || '—'}</td>
+                            <td style="padding:6px 10px;text-align:center;">
+                                ${s.is_new ? '<span class="badge" style="background:var(--success-green);color:white;font-size:9px;padding:1px 5px;">NEW</span>' : ''}
+                                ${s.is_revised ? '<span class="badge" style="background:#f59e0b;color:white;font-size:9px;padding:1px 5px;">REVISED</span>' : ''}
+                                ${!s.is_new && !s.is_revised ? '<span style="color:var(--text-tertiary);font-size:10px;">—</span>' : ''}
+                            </td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>`}
+        `;
+    } catch (err) {
+        sc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+async function rebuildRegisters(bidId) {
+    const btn = document.getElementById('rebuildRegBtn');
+    const prog = document.getElementById('rebuildProgress');
+    btn.disabled = true;
+    btn.textContent = 'Rebuilding...';
+    prog.innerHTML = renderProgressBar(-1, 1, 'Rebuilding drawing register...', 'rebuild');
+
+    try {
+        const dResult = await api(`/bidding/bids/${bidId}/drawing-register/rebuild`, { method: 'POST' });
+        prog.innerHTML = renderProgressBar(-1, 1, 'Rebuilding spec register...', 'rebuild');
+        const sResult = await api(`/bidding/bids/${bidId}/spec-register/rebuild`, { method: 'POST' });
+
+        prog.innerHTML = renderProgressBar(1, 1, `Done! Drawings: ${dResult.created || 0} created, ${dResult.updated || 0} updated. Specs: ${sResult.created || 0} created, ${sResult.updated || 0} updated.`, 'rebuild', true);
+        setTimeout(() => { prog.innerHTML = ''; renderDocRegisters(window._currentBid); }, 2000);
+    } catch (err) {
+        prog.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'rebuild', false, true);
+        btn.disabled = false;
+        btn.textContent = 'Rebuild from Documents';
+    }
+}
+
+// ── RFI & Clarifications Log ──
+
+async function renderDocRFI(bid) {
+    const bidId = bid.id;
+    const sc = document.getElementById('docSubContent');
+    sc.innerHTML = '<div class="empty-state"><p>Loading RFI log...</p></div>';
+
+    try {
+        const rfis = await api(`/bidding/bids/${bidId}/rfi-log`);
+        const addendums = [...new Set(rfis.map(r => r.addendum_number).filter(a => a != null))];
+
+        sc.innerHTML = `
+            <!-- Toolbar -->
+            <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+                <button class="btn btn-sm" onclick="rebuildRFILog(${bidId})" id="rebuildRfiBtn">Rebuild from Documents</button>
+                <button class="btn btn-sm" onclick="showAddRFI(${bidId})">+ Add RFI</button>
+                <button class="btn btn-sm" onclick="window.open('/api/bidding/bids/${bidId}/rfi-log/export','_blank')">Export to Excel</button>
+                <div style="flex:1;"></div>
+                <input type="text" id="rfiSearchInput" class="search-input" placeholder="Search RFIs..." style="width:200px;font-size:12px;" oninput="filterRFITable(this.value)">
+                <span style="font-size:12px;color:var(--text-secondary);">${rfis.length} RFIs${addendums.length ? ` across ${addendums.length} addendums` : ''}</span>
+            </div>
+            <div id="rebuildRfiProgress"></div>
+            <div id="rfiAddForm" style="display:none;"></div>
+
+            ${rfis.length === 0 ? '<div class="empty-state"><p>No RFIs yet. Click "Rebuild from Documents" to scan RFI/clarification documents, or add entries manually.</p></div>' : `
+            <div class="card" style="padding:0;overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:12px;" id="rfiTable">
+                    <thead>
+                        <tr style="background:var(--bg-hover);border-bottom:2px solid var(--border-default);">
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);width:70px;">RFI #</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Question</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);width:90px;">Asked By</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Response</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);width:50px;">Add.</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);width:70px;">Status</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);width:50px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rfis.map(rfi => {
+                            const q = rfi.question || '';
+                            const r = rfi.response || '';
+                            const qTrunc = q.length > 120 ? q.substring(0, 120) + '...' : q;
+                            const rTrunc = r.length > 120 ? r.substring(0, 120) + '...' : r;
+                            const statusColor = rfi.status === 'answered' ? 'var(--success-green)' : rfi.status === 'pending' ? '#f59e0b' : 'var(--text-tertiary)';
+                            return `
+                            <tr class="rfi-row" data-search="${escAttr((q + ' ' + r).toLowerCase())}" style="border-bottom:1px solid var(--border-default);cursor:pointer;" onclick="toggleRFIDetail(${rfi.id})">
+                                <td style="padding:6px 10px;font-family:monospace;font-weight:500;">${escHtml(rfi.rfi_number || '—')}</td>
+                                <td style="padding:6px 10px;">${escHtml(qTrunc)}</td>
+                                <td style="padding:6px 10px;color:var(--text-secondary);font-size:11px;">${escHtml(rfi.asked_by || '—')}</td>
+                                <td style="padding:6px 10px;color:var(--text-secondary);">${escHtml(rTrunc) || '<span style="color:var(--text-tertiary);font-style:italic;">No response</span>'}</td>
+                                <td style="padding:6px 10px;text-align:center;">${rfi.addendum_number != null ? rfi.addendum_number : '—'}</td>
+                                <td style="padding:6px 10px;text-align:center;"><span style="font-size:10px;font-weight:600;color:${statusColor};text-transform:uppercase;">${escHtml(rfi.status || 'answered')}</span></td>
+                                <td style="padding:6px 10px;text-align:center;" onclick="event.stopPropagation();">
+                                    <button onclick="deleteRFI(${rfi.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:11px;" title="Delete">&times;</button>
+                                </td>
+                            </tr>
+                            <tr><td colspan="7" style="padding:0;">
+                                <div id="rfi-detail-${rfi.id}" style="display:none;padding:10px 16px;background:var(--bg-hover);border-bottom:1px solid var(--border-default);">
+                                    <div style="margin-bottom:8px;">
+                                        <div style="font-size:11px;font-weight:600;color:var(--wollam-navy);margin-bottom:4px;">QUESTION</div>
+                                        <div style="font-size:12px;color:var(--text-primary);white-space:pre-wrap;">${escHtml(q)}</div>
+                                    </div>
+                                    ${r ? `<div style="margin-bottom:8px;">
+                                        <div style="font-size:11px;font-weight:600;color:var(--wollam-navy);margin-bottom:4px;">RESPONSE</div>
+                                        <div style="font-size:12px;color:var(--text-primary);white-space:pre-wrap;">${escHtml(r)}</div>
+                                    </div>` : ''}
+                                    <div style="font-size:10px;color:var(--text-tertiary);">
+                                        ${rfi.date_asked ? `Asked: ${rfi.date_asked}` : ''}
+                                        ${rfi.date_responded ? ` | Responded: ${rfi.date_responded}` : ''}
+                                        ${rfi.related_spec ? ` | Spec: ${escHtml(rfi.related_spec)}` : ''}
+                                        ${rfi.related_drawing ? ` | Drawing: ${escHtml(rfi.related_drawing)}` : ''}
+                                    </div>
+                                </div>
+                            </td></tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>`}
+        `;
+    } catch (err) {
+        sc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function toggleRFIDetail(rfiId) {
+    const el = document.getElementById(`rfi-detail-${rfiId}`);
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function filterRFITable(query) {
+    const q = query.toLowerCase().trim();
+    document.querySelectorAll('.rfi-row').forEach(row => {
+        const text = row.getAttribute('data-search') || '';
+        row.style.display = !q || text.includes(q) ? '' : 'none';
+    });
+}
+
+function showAddRFI(bidId) {
+    const form = document.getElementById('rfiAddForm');
+    if (form.style.display === 'block') { form.style.display = 'none'; return; }
+    form.style.display = 'block';
+    form.innerHTML = `
+        <div class="card" style="padding:12px;margin-bottom:12px;">
+            <h4 style="font-size:13px;font-weight:600;margin:0 0 8px;">Add RFI Entry</h4>
+            <div style="display:grid;grid-template-columns:100px 1fr;gap:8px;margin-bottom:8px;">
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">RFI #</label>
+                    <input type="text" id="rfi_num" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Question *</label>
+                    <input type="text" id="rfi_question" class="search-input" style="width:100%;"></div>
+            </div>
+            <div style="margin-bottom:8px;">
+                <label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:2px;">Response</label>
+                <textarea id="rfi_response" class="search-input" style="width:100%;height:60px;resize:vertical;"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button class="btn btn-sm" onclick="document.getElementById('rfiAddForm').style.display='none'">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="addRFIEntry(${bidId})">Add</button>
+            </div>
+        </div>
+    `;
+}
+
+async function addRFIEntry(bidId) {
+    const question = document.getElementById('rfi_question').value.trim();
+    if (!question) { alert('Question is required'); return; }
+    try {
+        await api(`/bidding/bids/${bidId}/rfi-log`, {
+            method: 'POST',
+            body: JSON.stringify({
+                rfi_number: document.getElementById('rfi_num').value.trim() || null,
+                question,
+                response: document.getElementById('rfi_response').value.trim() || null,
+            }),
+        });
+        renderDocRFI(window._currentBid);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function deleteRFI(rfiId, bidId) {
+    if (!confirm('Delete this RFI entry?')) return;
+    try {
+        await api(`/bidding/rfi-log/${rfiId}`, { method: 'DELETE' });
+        renderDocRFI(window._currentBid);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function rebuildRFILog(bidId) {
+    const btn = document.getElementById('rebuildRfiBtn');
+    const prog = document.getElementById('rebuildRfiProgress');
+    btn.disabled = true;
+    btn.textContent = 'Rebuilding...';
+    prog.innerHTML = renderProgressBar(-1, 1, 'Scanning RFI documents...', 'rfi-rebuild');
+
+    try {
+        const result = await api(`/bidding/bids/${bidId}/rfi-log/rebuild`, { method: 'POST' });
+        prog.innerHTML = renderProgressBar(1, 1, `Done! ${result.created || 0} created, ${result.skipped || 0} skipped (duplicates).`, 'rfi-rebuild', true);
+        setTimeout(() => { prog.innerHTML = ''; renderDocRFI(window._currentBid); }, 2000);
+    } catch (err) {
+        prog.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'rfi-rebuild', false, true);
+        btn.disabled = false;
+        btn.textContent = 'Rebuild from Documents';
     }
 }
 

@@ -165,6 +165,51 @@ class HoldingDistribute(BaseModel):
     target_item_ids: list[int]
 
 
+class DrawingRegisterUpdate(BaseModel):
+    drawing_number: Optional[str] = None
+    title: Optional[str] = None
+    discipline: Optional[str] = None
+    revision: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class SpecRegisterUpdate(BaseModel):
+    spec_section: Optional[str] = None
+    title: Optional[str] = None
+    division: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class RFICreate(BaseModel):
+    rfi_number: Optional[str] = None
+    question: str
+    asked_by: Optional[str] = None
+    date_asked: Optional[str] = None
+    response: Optional[str] = None
+    responded_by: Optional[str] = None
+    date_responded: Optional[str] = None
+    addendum_number: Optional[int] = None
+    related_spec: Optional[str] = None
+    related_drawing: Optional[str] = None
+    status: Optional[str] = "answered"
+    notes: Optional[str] = None
+
+
+class RFIUpdate(BaseModel):
+    rfi_number: Optional[str] = None
+    question: Optional[str] = None
+    asked_by: Optional[str] = None
+    date_asked: Optional[str] = None
+    response: Optional[str] = None
+    responded_by: Optional[str] = None
+    date_responded: Optional[str] = None
+    addendum_number: Optional[int] = None
+    related_spec: Optional[str] = None
+    related_drawing: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
 # ── Bid CRUD ─────────────────────────────────────────────────────
 
 @router.get("/bids")
@@ -328,6 +373,9 @@ async def delete_bid(bid_id: int):
                 logger.warning("Failed to delete vector collection for bid %d: %s", bid_id, e)
 
         # Delete children first (foreign key order)
+        conn.execute("DELETE FROM rfi_log WHERE bid_id = ?", (bid_id,))
+        conn.execute("DELETE FROM drawing_register WHERE bid_id = ?", (bid_id,))
+        conn.execute("DELETE FROM spec_register WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM bid_document_chunks WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM bid_documents WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM holding_distribution WHERE holding_item_id IN (SELECT id FROM bid_sov_item WHERE bid_id = ?)", (bid_id,))
@@ -485,6 +533,128 @@ async def list_documents(
             d.pop("extracted_text", None)
             result.append(d)
         return result
+    finally:
+        conn.close()
+
+
+@router.get("/bids/{bid_id}/documents/tree")
+async def get_document_tree(bid_id: int):
+    """Get documents organized in a folder tree structure."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM bid_documents WHERE bid_id = ? ORDER BY addendum_number ASC, created_at ASC",
+            (bid_id,),
+        ).fetchall()
+
+        # Build tree from dropbox_path segments or doc_category
+        tree: dict = {}  # path -> {type, name, path, children/doc}
+
+        for r in rows:
+            doc = dict(r)
+            doc.pop("extracted_text", None)
+            doc.pop("previous_extracted_text", None)
+
+            # Build file:// URL from file_path or dropbox_path
+            file_path = doc.get("file_path") or doc.get("dropbox_path") or ""
+            if file_path:
+                doc["dropbox_url"] = "file:///" + file_path.replace("\\", "/").replace(" ", "%20")
+            else:
+                doc["dropbox_url"] = None
+
+            doc["is_new"] = doc.get("sync_action") == "new"
+
+            # Determine folder path
+            dropbox_path = doc.get("dropbox_path") or ""
+            if dropbox_path:
+                # Parse path segments relative to bid folder
+                # dropbox_path is absolute — extract relative portion after bid folder
+                parts = dropbox_path.replace("\\", "/").split("/")
+                # Find the filename and use parent segments as folder path
+                filename = parts[-1] if parts else doc["filename"]
+                folder_parts = parts[:-1] if len(parts) > 1 else []
+
+                # Use only the last 2-3 path segments (within the bid folder)
+                # Look for the bid folder name pattern (YY-MM-NNNN)
+                bid_folder_idx = -1
+                for i, p in enumerate(folder_parts):
+                    import re
+                    if re.match(r"\d{2}-\d{2}-\d{4}", p):
+                        bid_folder_idx = i
+                        break
+
+                if bid_folder_idx >= 0:
+                    folder_parts = folder_parts[bid_folder_idx + 1:]
+                else:
+                    # Use last 2 parts as relative path
+                    folder_parts = folder_parts[-2:] if len(folder_parts) > 2 else folder_parts
+
+                folder_key = "/".join(folder_parts) if folder_parts else ""
+            else:
+                # Use doc_category as folder for manually uploaded docs
+                cat = doc.get("doc_category") or "general"
+                folder_key = cat.replace("_", " ").title()
+
+            # Insert into tree structure
+            if folder_key not in tree:
+                tree[folder_key] = {"type": "folder", "name": folder_key.split("/")[-1] if folder_key else "Root", "path": folder_key, "children": [], "doc_count": 0, "has_new": False, "has_updated": False}
+            tree[folder_key]["children"].append({
+                "type": "document",
+                "id": doc["id"],
+                "filename": doc["filename"],
+                "doc_category": doc.get("doc_category"),
+                "addendum_number": doc.get("addendum_number", 0),
+                "date_received": doc.get("date_received"),
+                "sync_action": doc.get("sync_action"),
+                "is_new": doc.get("is_new", False),
+                "word_count": doc.get("word_count", 0),
+                "file_size_bytes": doc.get("file_size_bytes", 0),
+                "dropbox_url": doc.get("dropbox_url"),
+                "file_path": file_path,
+                "version": doc.get("version", 1),
+            })
+            tree[folder_key]["doc_count"] += 1
+            if doc.get("sync_action") == "new":
+                tree[folder_key]["has_new"] = True
+            if doc.get("sync_action") == "updated":
+                tree[folder_key]["has_updated"] = True
+
+        # Build nested tree from flat folder paths
+        def build_nested(flat_tree):
+            nested = {}
+            for path, folder in sorted(flat_tree.items()):
+                parts = path.split("/") if path else [""]
+                current = nested
+                for i, part in enumerate(parts):
+                    subpath = "/".join(parts[:i+1])
+                    if subpath not in current:
+                        current[subpath] = {"type": "folder", "name": part or "Root", "path": subpath, "children": [], "subfolders": {}, "doc_count": 0, "has_new": False, "has_updated": False}
+                    if i == len(parts) - 1:
+                        current[subpath]["children"] = folder["children"]
+                        current[subpath]["doc_count"] = folder["doc_count"]
+                        current[subpath]["has_new"] = folder["has_new"]
+                        current[subpath]["has_updated"] = folder["has_updated"]
+                    current = current[subpath].get("subfolders", {})
+                    if not isinstance(current, dict):
+                        current = {}
+            return nested
+
+        # Flatten to sorted list
+        sorted_folders = sorted(tree.values(), key=lambda f: f["path"])
+
+        # Stats
+        total = len(rows)
+        new_count = sum(1 for r in rows if dict(r).get("sync_action") == "new")
+        updated_count = sum(1 for r in rows if dict(r).get("sync_action") == "updated")
+
+        return {
+            "tree": sorted_folders,
+            "stats": {
+                "total_documents": total,
+                "new_since_last_sync": new_count,
+                "updated_since_last_sync": updated_count,
+            },
+        }
     finally:
         conn.close()
 
@@ -1540,6 +1710,337 @@ async def list_holding_accounts(bid_id: int):
         return result
     finally:
         conn.close()
+
+
+# ── Drawing Register ──────────────────────────────────────────
+
+
+@router.get("/bids/{bid_id}/drawing-register")
+async def list_drawing_register(bid_id: int):
+    """Returns full drawing register sorted by discipline then drawing_number."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM drawing_register WHERE bid_id = ? ORDER BY discipline ASC, drawing_number ASC",
+            (bid_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.put("/drawing-register/{reg_id}")
+async def update_drawing_register(reg_id: int, body: DrawingRegisterUpdate):
+    """Manual edit of a drawing register entry."""
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT * FROM drawing_register WHERE id = ?", (reg_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Drawing register entry not found")
+
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not updates:
+            return dict(existing)
+        updates["ai_generated"] = 0  # manual edit overrides AI
+        updates["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [reg_id]
+        conn.execute(f"UPDATE drawing_register SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        row = conn.execute("SELECT * FROM drawing_register WHERE id = ?", (reg_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.post("/bids/{bid_id}/drawing-register/rebuild")
+async def rebuild_drawing_register(bid_id: int):
+    """Force rebuild drawing register from documents."""
+    try:
+        from app.services.register_builder import build_drawing_register
+        result = build_drawing_register(bid_id)
+        return result
+    except ImportError:
+        return {"status": "ok", "message": "Register builder not available — no API key?", "created": 0}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bids/{bid_id}/drawing-register/export")
+async def export_drawing_register(bid_id: int):
+    """Export drawing register as Excel."""
+    import io
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT drawing_number, title, discipline, revision, addendum_number, date_received, is_new, is_revised, notes FROM drawing_register WHERE bid_id = ? ORDER BY discipline, drawing_number",
+            (bid_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Drawing Register"
+        headers = ["Drawing #", "Title", "Discipline", "Rev", "Addendum", "Date Received", "New", "Revised", "Notes"]
+        ws.append(headers)
+        for r in rows:
+            ws.append([r["drawing_number"], r["title"], r["discipline"], r["revision"],
+                       r["addendum_number"], r["date_received"],
+                       "Yes" if r["is_new"] else "", "Yes" if r["is_revised"] else "", r["notes"]])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 headers={"Content-Disposition": f"attachment; filename=drawing_register_bid_{bid_id}.xlsx"})
+    except ImportError:
+        # Fallback to CSV
+        import csv
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["Drawing #", "Title", "Discipline", "Rev", "Addendum", "Date Received", "New", "Revised", "Notes"])
+        for r in rows:
+            writer.writerow([r["drawing_number"], r["title"], r["discipline"], r["revision"],
+                             r["addendum_number"], r["date_received"], r["is_new"], r["is_revised"], r["notes"]])
+        from fastapi.responses import Response
+        return Response(content=buf.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename=drawing_register_bid_{bid_id}.csv"})
+
+
+# ── Spec Register ────────────────────────────────────────────
+
+
+@router.get("/bids/{bid_id}/spec-register")
+async def list_spec_register(bid_id: int):
+    """Returns full spec register sorted by division then spec_section."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM spec_register WHERE bid_id = ? ORDER BY division ASC, spec_section ASC",
+            (bid_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.put("/spec-register/{reg_id}")
+async def update_spec_register(reg_id: int, body: SpecRegisterUpdate):
+    """Manual edit of a spec register entry."""
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT * FROM spec_register WHERE id = ?", (reg_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Spec register entry not found")
+
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not updates:
+            return dict(existing)
+        updates["ai_generated"] = 0
+        updates["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [reg_id]
+        conn.execute(f"UPDATE spec_register SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        row = conn.execute("SELECT * FROM spec_register WHERE id = ?", (reg_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.post("/bids/{bid_id}/spec-register/rebuild")
+async def rebuild_spec_register(bid_id: int):
+    """Force rebuild spec register from documents."""
+    try:
+        from app.services.register_builder import build_spec_register
+        result = build_spec_register(bid_id)
+        return result
+    except ImportError:
+        return {"status": "ok", "message": "Register builder not available", "created": 0}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bids/{bid_id}/spec-register/export")
+async def export_spec_register(bid_id: int):
+    """Export spec register as Excel."""
+    import io
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT spec_section, title, division, addendum_number, date_received, is_new, is_revised, revision_summary, notes FROM spec_register WHERE bid_id = ? ORDER BY division, spec_section",
+            (bid_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Spec Register"
+        headers = ["Section #", "Title", "Division", "Addendum", "Date Received", "New", "Revised", "Revision Summary", "Notes"]
+        ws.append(headers)
+        for r in rows:
+            ws.append([r["spec_section"], r["title"], r["division"], r["addendum_number"],
+                       r["date_received"], "Yes" if r["is_new"] else "", "Yes" if r["is_revised"] else "",
+                       r["revision_summary"], r["notes"]])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 headers={"Content-Disposition": f"attachment; filename=spec_register_bid_{bid_id}.xlsx"})
+    except ImportError:
+        import csv
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["Section #", "Title", "Division", "Addendum", "Date Received", "New", "Revised", "Revision Summary", "Notes"])
+        for r in rows:
+            writer.writerow([r["spec_section"], r["title"], r["division"], r["addendum_number"],
+                             r["date_received"], r["is_new"], r["is_revised"], r["revision_summary"], r["notes"]])
+        from fastapi.responses import Response
+        return Response(content=buf.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename=spec_register_bid_{bid_id}.csv"})
+
+
+# ── RFI & Clarifications Log ─────────────────────────────────
+
+
+@router.get("/bids/{bid_id}/rfi-log")
+async def list_rfi_log(bid_id: int):
+    """Returns full RFI log sorted by addendum then rfi_number."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM rfi_log WHERE bid_id = ? ORDER BY addendum_number ASC, rfi_number ASC",
+            (bid_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.post("/bids/{bid_id}/rfi-log")
+async def add_rfi_entry(bid_id: int, body: RFICreate):
+    """Manually add an RFI entry."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """INSERT INTO rfi_log (bid_id, rfi_number, question, asked_by, date_asked,
+               response, responded_by, date_responded, addendum_number, related_spec,
+               related_drawing, status, notes, ai_generated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+            (bid_id, body.rfi_number, body.question, body.asked_by, body.date_asked,
+             body.response, body.responded_by, body.date_responded, body.addendum_number,
+             body.related_spec, body.related_drawing, body.status or "answered", body.notes),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM rfi_log WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.put("/rfi-log/{rfi_id}")
+async def update_rfi_entry(rfi_id: int, body: RFIUpdate):
+    """Edit an RFI entry."""
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT * FROM rfi_log WHERE id = ?", (rfi_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="RFI entry not found")
+
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not updates:
+            return dict(existing)
+        updates["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [rfi_id]
+        conn.execute(f"UPDATE rfi_log SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        row = conn.execute("SELECT * FROM rfi_log WHERE id = ?", (rfi_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.delete("/rfi-log/{rfi_id}")
+async def delete_rfi_entry(rfi_id: int):
+    """Delete an RFI entry."""
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT * FROM rfi_log WHERE id = ?", (rfi_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="RFI entry not found")
+        conn.execute("DELETE FROM rfi_log WHERE id = ?", (rfi_id,))
+        conn.commit()
+        return {"deleted": True, "rfi_id": rfi_id}
+    finally:
+        conn.close()
+
+
+@router.post("/bids/{bid_id}/rfi-log/rebuild")
+async def rebuild_rfi_log(bid_id: int):
+    """Force rebuild RFI log from documents."""
+    try:
+        from app.services.rfi_parser import build_rfi_log
+        result = build_rfi_log(bid_id)
+        return result
+    except ImportError:
+        return {"status": "ok", "message": "RFI parser not available", "created": 0}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bids/{bid_id}/rfi-log/export")
+async def export_rfi_log(bid_id: int):
+    """Export RFI log as Excel."""
+    import io
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT rfi_number, question, asked_by, date_asked, response, responded_by, date_responded, addendum_number, related_spec, related_drawing, status, notes FROM rfi_log WHERE bid_id = ? ORDER BY addendum_number, rfi_number",
+            (bid_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "RFI Log"
+        headers = ["RFI #", "Question", "Asked By", "Date Asked", "Response", "Responded By", "Date Responded", "Addendum", "Related Spec", "Related Drawing", "Status", "Notes"]
+        ws.append(headers)
+        for r in rows:
+            ws.append([r["rfi_number"], r["question"], r["asked_by"], r["date_asked"],
+                       r["response"], r["responded_by"], r["date_responded"], r["addendum_number"],
+                       r["related_spec"], r["related_drawing"], r["status"], r["notes"]])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 headers={"Content-Disposition": f"attachment; filename=rfi_log_bid_{bid_id}.xlsx"})
+    except ImportError:
+        import csv
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["RFI #", "Question", "Asked By", "Date Asked", "Response", "Responded By", "Date Responded", "Addendum", "Related Spec", "Related Drawing", "Status", "Notes"])
+        for r in rows:
+            writer.writerow([r["rfi_number"], r["question"], r["asked_by"], r["date_asked"],
+                             r["response"], r["responded_by"], r["date_responded"], r["addendum_number"],
+                             r["related_spec"], r["related_drawing"], r["status"], r["notes"]])
+        from fastapi.responses import Response
+        return Response(content=buf.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename=rfi_log_bid_{bid_id}.csv"})
 
 
 # ── Document Chunking ──────────────────────────────────────────

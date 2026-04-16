@@ -27,6 +27,9 @@ def cleanup_test_bids():
         conn = get_connection()
         try:
             for bid_id in _test_bid_ids:
+                conn.execute("DELETE FROM rfi_log WHERE bid_id = ?", (bid_id,))
+                conn.execute("DELETE FROM drawing_register WHERE bid_id = ?", (bid_id,))
+                conn.execute("DELETE FROM spec_register WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM bid_document_chunks WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM bid_documents WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM holding_distribution WHERE holding_item_id IN (SELECT id FROM bid_sov_item WHERE bid_id = ?)", (bid_id,))
@@ -731,3 +734,220 @@ class TestOutOfScopeFiltering:
         from app.agents.runner import _load_bid_context
         context = _load_bid_context(bid["id"])
         assert context["sov_items"][0]["work_type"] == "self_perform"
+
+
+# ══════════════════════════════════════════════════════════════
+# PART B TESTS — Documents, Registers, RFI Log
+# ══════════════════════════════════════════════════════════════
+
+
+class TestDocumentTree:
+
+    def test_empty_tree(self):
+        bid = create_test_bid()
+        res = client.get(f"/api/bidding/bids/{bid['id']}/documents/tree")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["tree"] == []
+        assert data["stats"]["total_documents"] == 0
+
+    def test_tree_with_documents(self):
+        """Upload a doc and verify it appears in the tree."""
+        bid = create_test_bid()
+        # Upload a test document
+        from io import BytesIO
+        file_content = b"test document content for tree"
+        res = client.post(
+            f"/api/bidding/bids/{bid['id']}/documents",
+            files={"file": ("test_drawing.pdf", BytesIO(file_content), "application/pdf")},
+            data={"addendum_number": "1", "doc_category": "drawing"},
+        )
+        assert res.status_code == 200
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/documents/tree")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["stats"]["total_documents"] == 1
+        assert len(data["tree"]) >= 1
+        # Find the document in the tree
+        found = False
+        for folder in data["tree"]:
+            for child in folder.get("children", []):
+                if child.get("filename") == "test_drawing.pdf":
+                    found = True
+                    assert child["doc_category"] == "drawing"
+                    assert child["addendum_number"] == 1
+        assert found
+
+    def test_tree_stats(self):
+        """Verify stats count documents correctly."""
+        bid = create_test_bid()
+        from io import BytesIO
+        for i in range(3):
+            client.post(
+                f"/api/bidding/bids/{bid['id']}/documents",
+                files={"file": (f"doc_{i}.txt", BytesIO(b"content"), "text/plain")},
+                data={"doc_category": "general"},
+            )
+        res = client.get(f"/api/bidding/bids/{bid['id']}/documents/tree")
+        assert res.json()["stats"]["total_documents"] == 3
+
+
+class TestDrawingRegister:
+
+    def test_list_empty_register(self):
+        bid = create_test_bid()
+        res = client.get(f"/api/bidding/bids/{bid['id']}/drawing-register")
+        assert res.status_code == 200
+        assert res.json() == []
+
+    def test_update_drawing_register_entry(self):
+        bid = create_test_bid()
+        # Insert a test entry directly
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO drawing_register (bid_id, drawing_number, title, discipline, ai_generated) VALUES (?, ?, ?, ?, 1)",
+                (bid["id"], "C-101", "Site Plan", "civil"),
+            )
+            conn.commit()
+            reg_id = conn.execute("SELECT id FROM drawing_register WHERE bid_id = ? AND drawing_number = 'C-101'", (bid["id"],)).fetchone()["id"]
+        finally:
+            conn.close()
+
+        res = client.put(f"/api/bidding/drawing-register/{reg_id}", json={"title": "Updated Site Plan"})
+        assert res.status_code == 200
+        assert res.json()["title"] == "Updated Site Plan"
+        assert res.json()["ai_generated"] == 0  # manual override
+
+    def test_export_drawing_register(self):
+        bid = create_test_bid()
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO drawing_register (bid_id, drawing_number, title, discipline) VALUES (?, ?, ?, ?)",
+                (bid["id"], "S-201", "Foundation Plan", "structural"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/drawing-register/export")
+        assert res.status_code == 200
+        # Should return either xlsx or csv
+        assert "spreadsheet" in res.headers.get("content-type", "") or "csv" in res.headers.get("content-type", "")
+
+
+class TestSpecRegister:
+
+    def test_list_empty_register(self):
+        bid = create_test_bid()
+        res = client.get(f"/api/bidding/bids/{bid['id']}/spec-register")
+        assert res.status_code == 200
+        assert res.json() == []
+
+    def test_update_spec_register_entry(self):
+        bid = create_test_bid()
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO spec_register (bid_id, spec_section, title, division) VALUES (?, ?, ?, ?)",
+                (bid["id"], "03300", "Cast-in-Place Concrete", "Division 03"),
+            )
+            conn.commit()
+            reg_id = conn.execute("SELECT id FROM spec_register WHERE bid_id = ? AND spec_section = '03300'", (bid["id"],)).fetchone()["id"]
+        finally:
+            conn.close()
+
+        res = client.put(f"/api/bidding/spec-register/{reg_id}", json={"title": "Concrete Work Updated"})
+        assert res.status_code == 200
+        assert res.json()["title"] == "Concrete Work Updated"
+
+    def test_export_spec_register(self):
+        bid = create_test_bid()
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO spec_register (bid_id, spec_section, title, division) VALUES (?, ?, ?, ?)",
+                (bid["id"], "02710", "Erosion Control", "Division 02"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/spec-register/export")
+        assert res.status_code == 200
+
+
+class TestRFILog:
+
+    def test_list_empty_rfi_log(self):
+        bid = create_test_bid()
+        res = client.get(f"/api/bidding/bids/{bid['id']}/rfi-log")
+        assert res.status_code == 200
+        assert res.json() == []
+
+    def test_add_rfi_entry(self):
+        bid = create_test_bid()
+        res = client.post(f"/api/bidding/bids/{bid['id']}/rfi-log", json={
+            "rfi_number": "RFI-001",
+            "question": "What concrete strength is required?",
+            "response": "4000 PSI per Section 03300",
+            "status": "answered",
+        })
+        assert res.status_code == 200
+        entry = res.json()
+        assert entry["rfi_number"] == "RFI-001"
+        assert entry["question"] == "What concrete strength is required?"
+        assert entry["response"] == "4000 PSI per Section 03300"
+        assert entry["ai_generated"] == 0
+
+    def test_update_rfi_entry(self):
+        bid = create_test_bid()
+        entry = client.post(f"/api/bidding/bids/{bid['id']}/rfi-log", json={
+            "question": "Thickness of slab?",
+        }).json()
+
+        res = client.put(f"/api/bidding/rfi-log/{entry['id']}", json={
+            "response": "6 inches per drawing S-101",
+            "status": "answered",
+        })
+        assert res.status_code == 200
+        assert res.json()["response"] == "6 inches per drawing S-101"
+
+    def test_delete_rfi_entry(self):
+        bid = create_test_bid()
+        entry = client.post(f"/api/bidding/bids/{bid['id']}/rfi-log", json={
+            "question": "To be deleted",
+        }).json()
+
+        res = client.delete(f"/api/bidding/rfi-log/{entry['id']}")
+        assert res.status_code == 200
+
+        remaining = client.get(f"/api/bidding/bids/{bid['id']}/rfi-log").json()
+        assert len(remaining) == 0
+
+    def test_rfi_log_ordering(self):
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/rfi-log", json={
+            "rfi_number": "RFI-002", "question": "Q2", "addendum_number": 2,
+        })
+        client.post(f"/api/bidding/bids/{bid['id']}/rfi-log", json={
+            "rfi_number": "RFI-001", "question": "Q1", "addendum_number": 1,
+        })
+
+        rfis = client.get(f"/api/bidding/bids/{bid['id']}/rfi-log").json()
+        assert rfis[0]["rfi_number"] == "RFI-001"
+        assert rfis[1]["rfi_number"] == "RFI-002"
+
+    def test_export_rfi_log(self):
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/rfi-log", json={
+            "rfi_number": "RFI-001", "question": "Test question", "response": "Test answer",
+        })
+        res = client.get(f"/api/bidding/bids/{bid['id']}/rfi-log/export")
+        assert res.status_code == 200
+
+    def test_delete_rfi_not_found(self):
+        res = client.delete("/api/bidding/rfi-log/99999")
+        assert res.status_code == 404
