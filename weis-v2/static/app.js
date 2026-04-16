@@ -31,6 +31,7 @@ const state = {
     biddingTab: 'overview',
     biddingSovPreview: null,
     docSubTab: 'explorer',
+    intelAgent: null,
 };
 
 // ── API Helpers ──
@@ -2995,12 +2996,29 @@ async function renderBidDetail(bid) {
     const content = document.getElementById('content');
     const tab = state.biddingTab;
 
+    // Load setup progress in background
+    let setupHtml = '';
+    try {
+        const sp = await api(`/bidding/bids/${bid.id}/setup-progress`).catch(() => null);
+        if (sp) setupHtml = renderSetupProgress(sp);
+    } catch (e) {}
+
     content.innerHTML = `
-        <div style="margin-bottom:16px;">
-            <button class="btn btn-sm" onclick="navigate('bidding')" style="margin-bottom:12px;">
+        <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;">
+            <button class="btn btn-sm" onclick="navigate('bidding')">
                 &larr; Back to Bid Board
             </button>
+            <div style="flex:1;"></div>
+            <button class="btn btn-primary btn-sm" id="globalRefreshBtn" onclick="refreshIntelligence(${bid.id})" style="display:flex;align-items:center;gap:6px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                Refresh Intelligence
+            </button>
         </div>
+
+        <div id="refreshProgress"></div>
+        <div id="refreshBanner"></div>
+
+        ${setupHtml}
 
         <!-- Summary bar -->
         <div class="kpi-grid" style="margin-bottom:16px;">
@@ -3026,6 +3044,30 @@ async function renderBidDetail(bid) {
     else if (tab === 'sov') renderBidSOV(bid.id);
     else if (tab === 'documents') renderBidDocuments(bid);
     else if (tab === 'intelligence') renderBidIntelligence(bid);
+}
+
+function renderSetupProgress(sp) {
+    const steps = [
+        { key: 'documents_synced', label: 'Documents synced', count: sp.counts.documents },
+        { key: 'sov_defined', label: 'SOV defined', count: sp.counts.sov_items },
+        { key: 'scope_designated', label: 'Scope designated', count: sp.counts.scoped_items },
+        { key: 'intelligence_analyzed', label: 'Intelligence analyzed', count: sp.counts.agent_reports },
+        { key: 'intelligence_mapped', label: 'Intelligence mapped', count: sp.counts.mapped_items },
+    ];
+    const completed = steps.filter(s => sp[s.key]).length;
+    if (completed >= 5) return ''; // All done, no need to show
+
+    return `
+    <div style="display:flex;gap:4px;margin-bottom:12px;align-items:center;">
+        ${steps.map(s => {
+            const done = sp[s.key];
+            return `<div style="display:flex;align-items:center;gap:4px;padding:4px 8px;border-radius:var(--radius-sm);font-size:11px;background:${done ? 'rgba(22,163,74,0.08)' : 'var(--bg-hover)'};color:${done ? 'var(--success-green)' : 'var(--text-tertiary)'};">
+                <span>${done ? '&#10003;' : '&#9744;'}</span>
+                <span>${s.label}</span>
+                ${s.count > 0 ? `<span style="font-weight:600;">(${s.count})</span>` : ''}
+            </div>`;
+        }).join('<span style="color:var(--border-default);">&#8594;</span>')}
+    </div>`;
 }
 
 function switchBidTab(tab, bidId) {
@@ -4406,7 +4448,15 @@ async function syncFromDropbox(bidId) {
         if (result.unchanged) parts.push(`${result.unchanged} unchanged`);
         if (result.removed) parts.push(`${result.removed} removed`);
         resultDiv.innerHTML = `<span style="font-size:12px;color:var(--success-green);font-weight:500;">Synced: ${parts.join(', ') || '0 files'}</span>`;
-        setTimeout(() => loadBidDetail(bidId), 1500);
+        setTimeout(() => {
+            loadBidDetail(bidId);
+            // Show refresh banner if documents changed
+            const newCount = result.new || 0;
+            const updCount = result.updated || 0;
+            if (newCount > 0 || updCount > 0) {
+                setTimeout(() => showRefreshBanner(bidId, newCount, updCount), 500);
+            }
+        }, 1500);
     } catch (err) {
         resultDiv.innerHTML = `<span style="font-size:12px;color:var(--danger-red);">Sync failed: ${escHtml(err.message)}</span>`;
         btn.disabled = false;
@@ -4486,96 +4536,372 @@ async function renderBidIntelligence(bid) {
         const agentNames = Object.keys(agents).filter(n => n !== 'chief_estimator');
         const hasReports = reports.length > 0;
         const staleCount = intel.agents_needing_reanalysis || 0;
-        const chiefReport = reports.find(r => r.agent_name === 'chief_estimator');
+        const subReports = reports.filter(r => r.agent_name !== 'chief_estimator');
 
-        // Overall risk from chief or highest sub-agent
+        // Compute risk dashboard
         let overallRisk = 'low';
         const riskOrder = { low: 0, medium: 1, high: 2, critical: 3 };
-        reports.forEach(r => {
+        subReports.forEach(r => {
             if (riskOrder[r.risk_rating] > riskOrder[overallRisk]) overallRisk = r.risk_rating;
         });
+        const totalFlags = subReports.reduce((sum, r) => sum + (r.flags_count || 0), 0);
 
-        const totalFlags = reports.reduce((sum, r) => sum + (r.flags_count || 0), 0);
+        // Count critical flags and clarifications across all reports
+        let criticalCount = 0;
+        let clarificationCount = 0;
+        subReports.forEach(r => {
+            const rj = r.report_json || {};
+            (rj.key_risks || []).forEach(kr => { if (kr.severity === 'critical' || kr.severity === 'high') criticalCount++; });
+            (rj.flags || []).forEach(() => criticalCount++);
+            (rj.missing_documents || []).forEach(() => clarificationCount++);
+        });
+
+        const selectedAgent = state.intelAgent || (agentNames.length > 0 ? agentNames[0] : null);
 
         tc.innerHTML = `
-            <!-- Agent Status Cards -->
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
-                ${agentNames.map(name => {
-                    const a = agents[name] || {};
-                    return `
-                    <div class="card card-animate" style="padding:14px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                            <span style="font-size:12px;font-weight:600;color:var(--text-primary);">${escHtml(a.display_name || name)}</span>
-                            ${agentStatusIcon(a.status, a.is_stale)}
-                        </div>
-                        ${a.status !== 'not_run' ? `
-                            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${a.flags_count || 0} flag(s)</div>
-                            ${a.risk_rating ? riskBadge(a.risk_rating) : ''}
-                            ${a.is_stale ? '<div style="font-size:10px;color:#F59E0B;margin-top:4px;">Needs re-analysis</div>' : ''}
-                        ` : '<div style="font-size:11px;color:var(--text-tertiary);">Not run yet</div>'}
-                    </div>`;
-                }).join('')}
-            </div>
-
-            <!-- Action Bar -->
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;">
-                <button class="btn btn-primary btn-sm" id="runAllBtn" onclick="runAllAgents(${bidId})">Run All Agents</button>
-                <select id="singleAgentSelect" class="search-input" style="font-size:12px;padding:6px 10px;">
-                    <option value="">Run single agent...</option>
-                    ${agentNames.map(n => `<option value="${n}">${escHtml((agents[n] || {}).display_name || n)}</option>`).join('')}
-                </select>
-                <button class="btn btn-sm" onclick="runSingleAgent(${bidId})">Run</button>
-                <div style="flex:1;"></div>
-                ${hasReports ? `<span style="font-size:11px;color:var(--text-tertiary);">Last run: ${reports[0].updated_at ? new Date(reports[0].updated_at).toLocaleString() : '—'}</span>` : ''}
-            </div>
-
             ${staleCount > 0 ? `
-            <div class="card" style="padding:12px 16px;margin-bottom:16px;border-left:3px solid #F59E0B;background:rgba(245,158,11,0.05);">
-                <span style="font-size:13px;color:#92400E;">&#9888; ${staleCount} agent report(s) are stale — documents have changed since last analysis. Re-run recommended.</span>
+            <div style="padding:8px 12px;margin-bottom:12px;background:#FFFBEB;border-left:3px solid #F59E0B;border-radius:var(--radius-sm);font-size:12px;color:#92400E;">
+                &#9888; ${staleCount} agent report(s) are stale — documents have changed since last analysis. Click <strong>Refresh Intelligence</strong> above.
             </div>` : ''}
 
             ${!hasReports ? `
             <div class="empty-state">
                 <h3>No Intelligence Reports</h3>
-                <p>${intel.total_documents > 0 ? 'Click "Run All Agents" to analyze bid documents.' : 'Upload or sync documents first, then run analysis.'}</p>
+                <p>${intel.total_documents > 0 ? 'Click "Refresh Intelligence" in the header to analyze bid documents.' : 'Upload or sync documents first, then refresh intelligence.'}</p>
+                ${intel.total_documents > 0 && !(intel.agents && Object.values(intel.agents).some(a => a.status !== 'not_run')) ? `
+                <div style="margin-top:12px;">
+                    <button class="btn btn-primary btn-sm" onclick="refreshIntelligence(${bidId})">Refresh Intelligence Now</button>
+                </div>` : ''}
             </div>` : `
 
-            <!-- Overall Risk Banner -->
-            <div class="card" style="padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;background:var(--bg-hover);">
-                <span style="font-size:13px;font-weight:600;">Overall Risk:</span>
-                ${riskBadge(overallRisk)}
-                <span style="font-size:12px;color:var(--text-secondary);">${totalFlags} flag(s) across ${reports.filter(r => r.agent_name !== 'chief_estimator').length} agent(s)</span>
-                <span style="font-size:12px;color:var(--text-tertiary);">&#183; ${intel.total_documents} documents analyzed</span>
-            </div>
-
-            <!-- Agent Report Accordion -->
-            <div id="agentAccordion">
-                ${reports.filter(r => r.agent_name !== 'chief_estimator').map(r => `
-                    <div class="card" style="margin-bottom:8px;overflow:hidden;">
-                        <div style="padding:12px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;background:var(--bg-surface);"
-                             onclick="toggleAgentReport('${r.agent_name}')">
-                            <span id="arrow_${r.agent_name}" style="transition:transform 0.2s;font-size:12px;color:var(--text-tertiary);">&#9654;</span>
-                            <span style="flex:1;font-size:13px;font-weight:600;">${escHtml((agents[r.agent_name] || {}).display_name || r.agent_name)}</span>
-                            ${riskBadge(r.risk_rating)}
-                            <span style="font-size:11px;color:var(--text-secondary);">${r.flags_count || 0} flag(s)</span>
-                        </div>
-                        <div id="report_${r.agent_name}" style="display:none;padding:0 16px 16px;border-top:1px solid var(--border-default);">
-                            ${renderAgentReport(r)}
-                        </div>
+            <!-- Bid Risk Dashboard -->
+            <div class="card" style="padding:14px 16px;margin-bottom:16px;background:var(--bg-hover);">
+                <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="font-size:13px;font-weight:600;">Risk:</span>
+                        ${riskBadge(overallRisk)}
                     </div>
-                `).join('')}
+                    <div style="font-size:12px;color:var(--text-secondary);">
+                        <span style="color:var(--danger-red);font-weight:600;">${totalFlags}</span> flag(s)
+                    </div>
+                    <div style="font-size:12px;color:var(--text-secondary);">
+                        ${criticalCount > 0 ? `<span style="color:var(--danger-red);font-weight:600;">${criticalCount}</span> critical` : '<span style="color:var(--success-green);">0 critical</span>'}
+                    </div>
+                    <div style="font-size:12px;color:var(--text-secondary);">
+                        ${intel.total_documents} docs analyzed
+                    </div>
+                    <div style="flex:1;"></div>
+                    ${hasReports ? `<span style="font-size:11px;color:var(--text-tertiary);">Last run: ${subReports[0]?.updated_at ? new Date(subReports[0].updated_at).toLocaleString() : '—'}</span>` : ''}
+                </div>
             </div>
 
-            ${chiefReport ? `
-            <!-- Chief Estimator Brief -->
-            <div class="card" style="margin-top:16px;padding:16px;border:2px solid var(--wollam-navy);">
-                <h3 style="font-size:14px;font-weight:600;margin:0 0 12px;color:var(--wollam-navy);">Chief Estimator Brief</h3>
-                ${renderChiefBrief(chiefReport)}
-            </div>` : ''}
+            <!-- Sidebar + Content Layout -->
+            <div style="display:flex;gap:16px;min-height:400px;">
+                <!-- Agent Sidebar -->
+                <div style="width:200px;flex-shrink:0;">
+                    ${agentNames.map(name => {
+                        const a = agents[name] || {};
+                        const report = subReports.find(r => r.agent_name === name);
+                        const isActive = name === selectedAgent;
+                        const flagCount = report ? (report.flags_count || 0) : 0;
+                        return `
+                        <div onclick="state.intelAgent='${name}';renderBidIntelligence(window._currentBid);"
+                             style="padding:10px 12px;margin-bottom:4px;border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;gap:8px;
+                                    ${isActive ? 'background:var(--bg-selected);border-left:3px solid var(--wollam-navy);' : 'background:var(--bg-surface);border-left:3px solid transparent;'}
+                                    ${a.is_stale ? 'opacity:0.7;' : ''}">
+                            ${agentStatusIcon(a.status, a.is_stale)}
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-size:12px;font-weight:${isActive ? '600' : '500'};color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(a.display_name || name)}</div>
+                                ${a.status !== 'not_run' ? `<div style="font-size:10px;color:var(--text-tertiary);">${flagCount} flags ${a.risk_rating ? '· ' + a.risk_rating.toUpperCase() : ''}</div>` : '<div style="font-size:10px;color:var(--text-tertiary);">Not run</div>'}
+                            </div>
+                        </div>`;
+                    }).join('')}
+                </div>
+
+                <!-- Agent Content Area -->
+                <div style="flex:1;min-width:0;">
+                    ${selectedAgent ? renderAgentContent(selectedAgent, agents[selectedAgent], subReports.find(r => r.agent_name === selectedAgent), bidId) : '<div class="empty-state"><p>Select an agent from the sidebar.</p></div>'}
+                </div>
+            </div>
             `}
         `;
     } catch (err) {
         tc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function renderAgentContent(agentName, agentInfo, report, bidId) {
+    if (!report) {
+        return `<div class="empty-state" style="padding:20px;"><p>${escHtml(agentInfo?.display_name || agentName)} has not been run yet. Click "Refresh Intelligence" to analyze.</p></div>`;
+    }
+
+    const rj = report.report_json || {};
+    let html = '';
+
+    // Agent header
+    html += `<div style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <h3 style="font-size:15px;font-weight:600;margin:0;color:var(--text-primary);">${escHtml(agentInfo?.display_name || agentName)}</h3>
+            ${riskBadge(report.risk_rating)}
+            ${report.is_stale ? '<span style="font-size:10px;color:#F59E0B;font-weight:600;">&#9888; STALE</span>' : ''}
+        </div>
+        ${report.summary_text ? `<p style="font-size:12px;color:var(--text-secondary);margin:0 0 12px;">${escHtml(report.summary_text)}</p>` : ''}
+    </div>`;
+
+    // Per-agent custom summary at top
+    if (agentName === 'legal_analyst') html += renderLegalSummary(rj);
+    else if (agentName === 'qaqc_manager') html += renderQAQCSummary(rj);
+    else if (agentName === 'subcontract_manager') html += renderSubSummary(rj);
+    else if (agentName === 'document_control') html += renderDocControlSummary(rj);
+
+    // Priority 1: Critical Flags
+    const flags = rj.flags || [];
+    const criticalRisks = (rj.key_risks || []).filter(r => r.severity === 'critical' || r.severity === 'high');
+    if (flags.length > 0 || criticalRisks.length > 0) {
+        html += `<div style="margin-bottom:16px;">
+            <div style="font-size:12px;font-weight:600;color:var(--danger-red);margin-bottom:8px;text-transform:uppercase;">&#9888; Critical Flags (${flags.length + criticalRisks.length})</div>`;
+        flags.forEach(f => {
+            html += `<div style="padding:8px 12px;margin-bottom:4px;background:rgba(239,68,68,0.05);border-left:3px solid var(--danger-red);border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:12px;color:#991B1B;">${escHtml(typeof f === 'string' ? f : JSON.stringify(f))}</div>`;
+        });
+        criticalRisks.forEach(r => {
+            html += `<div style="padding:8px 12px;margin-bottom:4px;background:rgba(239,68,68,0.05);border-left:3px solid ${r.severity === 'critical' ? 'var(--danger-red)' : '#F59E0B'};border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:12px;">
+                <span style="font-weight:600;color:var(--text-primary);">${escHtml(r.risk || '')}</span>
+                ${r.clause ? `<span style="color:var(--text-tertiary);"> (${escHtml(r.clause)})</span>` : ''}
+                ${r.recommendation ? `<div style="color:var(--text-secondary);margin-top:2px;font-style:italic;">${escHtml(r.recommendation)}</div>` : ''}
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    // Priority 2: Clarifications & RFI Candidates
+    const missing = rj.missing_documents || [];
+    const missingInfo = rj.missing_information || [];
+    const clarItems = [...missing.map(m => ({text: m, type: 'missing'})), ...missingInfo.map(m => ({text: typeof m === 'string' ? m : m.detail || m.title || JSON.stringify(m), type: 'clarification'}))];
+    if (clarItems.length > 0) {
+        html += `<div style="margin-bottom:16px;">
+            <div style="font-size:12px;font-weight:600;color:#92400E;margin-bottom:8px;text-transform:uppercase;">Clarifications & RFI Candidates (${clarItems.length})</div>`;
+        clarItems.forEach((c, i) => {
+            html += `<div style="padding:8px 12px;margin-bottom:4px;background:rgba(245,158,11,0.05);border-left:3px solid #F59E0B;border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:12px;display:flex;align-items:center;gap:8px;">
+                <span style="flex:1;color:var(--text-primary);">${escHtml(c.text)}</span>
+                <button onclick="event.stopPropagation();addToRFIFromIntel(${bidId}, '${escAttr(c.text.substring(0,200))}')" class="btn btn-sm" style="font-size:10px;padding:2px 6px;white-space:nowrap;" title="Add to RFI Log">+ RFI</button>
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    // Priority 3: Key Requirements (medium/low severity risks + agent-specific content)
+    const keyRisks = (rj.key_risks || []).filter(r => r.severity !== 'critical' && r.severity !== 'high');
+    const hasKeyContent = keyRisks.length > 0 || (agentName === 'legal_analyst' && rj.insurance) || (agentName === 'qaqc_manager' && (rj.certifications_required || []).length > 0) || (agentName === 'subcontract_manager' && (rj.self_perform_recommended || []).length > 0);
+    if (hasKeyContent) {
+        html += `<div style="margin-bottom:16px;">
+            <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:8px;text-transform:uppercase;">Key Requirements</div>`;
+        if (agentName === 'legal_analyst') html += renderLegalKeyReqs(rj);
+        else if (agentName === 'qaqc_manager') html += renderQAQCKeyReqs(rj);
+        else if (agentName === 'subcontract_manager') html += renderSubKeyReqs(rj);
+        else if (agentName === 'document_control') html += renderDocControlKeyReqs(rj);
+        keyRisks.forEach(r => {
+            const sevColor = r.severity === 'medium' ? '#F59E0B' : 'var(--text-tertiary)';
+            html += `<div style="padding:6px 12px;margin-bottom:3px;border-left:3px solid ${sevColor};font-size:12px;">
+                <span style="font-weight:500;">${escHtml(r.risk || '')}</span>
+                ${r.clause ? `<span style="color:var(--text-tertiary);"> (${escHtml(r.clause)})</span>` : ''}
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    // Priority 4: Reference Details (collapsed by default)
+    const docIndex = rj.document_index || [];
+    const addendumChanges = rj.addendum_changes || [];
+    if (docIndex.length > 0 || addendumChanges.length > 0) {
+        const refId = `ref-${agentName}`;
+        html += `<div style="margin-bottom:16px;">
+            <div onclick="document.getElementById('${refId}').style.display = document.getElementById('${refId}').style.display === 'none' ? 'block' : 'none'; this.querySelector('.ref-chevron').textContent = document.getElementById('${refId}').style.display === 'none' ? '▶' : '▼';"
+                 style="font-size:12px;font-weight:600;color:var(--text-tertiary);margin-bottom:8px;text-transform:uppercase;cursor:pointer;">
+                <span class="ref-chevron">&#9654;</span> Reference Details
+            </div>
+            <div id="${refId}" style="display:none;">`;
+        if (docIndex.length > 0) {
+            html += `<div style="margin-bottom:8px;font-size:11px;color:var(--text-secondary);">${docIndex.length} documents reviewed</div>`;
+            docIndex.slice(0, 20).forEach(d => {
+                html += `<div style="font-size:11px;padding:2px 0;color:var(--text-tertiary);">${escHtml(d.filename || '')} ${d.category ? `[${escHtml(d.category)}]` : ''}</div>`;
+            });
+            if (docIndex.length > 20) html += `<div style="font-size:11px;color:var(--text-tertiary);">... and ${docIndex.length - 20} more</div>`;
+        }
+        if (addendumChanges.length > 0) {
+            html += `<div style="margin-top:8px;font-size:11px;font-weight:600;color:var(--text-secondary);">Addendum Changes</div>`;
+            addendumChanges.forEach(c => {
+                html += `<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border-default);">Add. ${c.addendum || '?'}: ${escHtml(c.changes || '')}</div>`;
+            });
+        }
+        html += `</div></div>`;
+    }
+
+    return html;
+}
+
+// Per-agent summary renderers (shown at top of agent content)
+
+function renderLegalSummary(rj) {
+    let html = '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
+    const ld = rj.liquidated_damages || {};
+    if (ld.has_ld) {
+        html += `<div class="card" style="padding:10px 14px;flex:1;min-width:140px;">
+            <div style="font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;">LDs</div>
+            <div style="font-size:16px;font-weight:700;">${ld.amount_per_day ? '$' + fmt(ld.amount_per_day) + '/day' : 'Yes'}</div>
+            ${ld.cap ? `<div style="font-size:10px;color:var(--text-secondary);">Cap: $${fmt(ld.cap)}</div>` : '<div style="font-size:10px;color:var(--danger-red);font-weight:600;">NO CAP</div>'}
+        </div>`;
+    }
+    const bond = rj.bonding || {};
+    if (bond.estimated_cost_pct) {
+        html += `<div class="card" style="padding:10px 14px;flex:1;min-width:140px;">
+            <div style="font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;">Bond</div>
+            <div style="font-size:16px;font-weight:700;">${bond.estimated_cost_pct}%</div>
+            <div style="font-size:10px;color:var(--text-secondary);">${[bond.bid_bond ? 'Bid' : '', bond.performance_bond ? 'Perf' : '', bond.payment_bond ? 'Payment' : ''].filter(Boolean).join(' · ')}</div>
+        </div>`;
+    }
+    const ret = rj.retainage || {};
+    if (ret.percentage) {
+        html += `<div class="card" style="padding:10px 14px;flex:1;min-width:140px;">
+            <div style="font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;">Retainage</div>
+            <div style="font-size:16px;font-weight:700;">${ret.percentage}%</div>
+            ${ret.release_conditions ? `<div style="font-size:10px;color:var(--text-secondary);">${escHtml(ret.release_conditions)}</div>` : ''}
+        </div>`;
+    }
+    const pay = rj.payment_terms || {};
+    if (pay.frequency) {
+        html += `<div class="card" style="padding:10px 14px;flex:1;min-width:140px;">
+            <div style="font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;">Payment</div>
+            <div style="font-size:14px;font-weight:600;">${escHtml(pay.frequency)}</div>
+            ${pay.net_days ? `<div style="font-size:10px;color:var(--text-secondary);">Net ${pay.net_days} days</div>` : ''}
+        </div>`;
+    }
+    html += '</div>';
+    return html;
+}
+
+function renderQAQCSummary(rj) {
+    const tests = rj.testing_requirements || [];
+    if (tests.length === 0) return '';
+    return `<div style="margin-bottom:16px;">
+        <div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">Testing Requirements (${tests.length})</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <tr style="background:var(--bg-hover);"><th style="padding:4px 8px;text-align:left;">Test</th><th style="padding:4px 8px;text-align:left;">Frequency</th><th style="padding:4px 8px;text-align:left;">Spec</th><th style="padding:4px 8px;text-align:center;">Impact</th></tr>
+            ${tests.map(t => `<tr style="border-bottom:1px solid var(--border-default);">
+                <td style="padding:4px 8px;">${escHtml(t.test || '')}</td>
+                <td style="padding:4px 8px;">${escHtml(t.frequency || '')}</td>
+                <td style="padding:4px 8px;color:var(--text-tertiary);">${escHtml(t.spec_section || '')}</td>
+                <td style="padding:4px 8px;text-align:center;">${t.cost_impact === 'high' ? '<span style="color:var(--danger-red);font-weight:600;">HIGH</span>' : t.cost_impact === 'moderate' ? '<span style="color:#F59E0B;">MOD</span>' : '<span style="color:var(--text-tertiary);">LOW</span>'}</td>
+            </tr>`).join('')}
+        </table>
+    </div>`;
+}
+
+function renderSubSummary(rj) {
+    const subs = rj.recommended_sub_scopes || [];
+    if (subs.length === 0) return '';
+    return `<div style="margin-bottom:16px;">
+        <div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">Recommended Sub Scopes (${subs.length})</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
+            ${subs.map(s => `<div style="padding:8px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:11px;">
+                <div style="font-weight:600;">${escHtml(s.discipline || '')}</div>
+                <div style="color:var(--text-secondary);margin-top:2px;">${escHtml(s.scope_summary || '')}</div>
+                ${s.estimated_value_pct ? `<div style="color:var(--text-tertiary);margin-top:2px;">~${s.estimated_value_pct}% of bid</div>` : ''}
+            </div>`).join('')}
+        </div>
+    </div>`;
+}
+
+function renderDocControlSummary(rj) {
+    const docs = rj.document_index || [];
+    const missing = rj.missing_documents || [];
+    if (docs.length === 0 && missing.length === 0) return '';
+
+    const cats = {};
+    docs.forEach(d => { const c = d.category || 'general'; cats[c] = (cats[c] || 0) + 1; });
+
+    return `<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+        <div class="card" style="padding:10px 14px;min-width:120px;">
+            <div style="font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;">Documents</div>
+            <div style="font-size:16px;font-weight:700;">${rj.documents_reviewed || docs.length}</div>
+        </div>
+        ${Object.entries(cats).slice(0, 4).map(([k, v]) => `
+        <div style="padding:6px 10px;font-size:11px;background:var(--bg-hover);border-radius:var(--radius-sm);">
+            <span style="font-weight:600;">${v}</span> ${k.replace(/_/g, ' ')}
+        </div>`).join('')}
+        ${missing.length > 0 ? `<div style="padding:6px 10px;font-size:11px;background:rgba(245,158,11,0.08);border-radius:var(--radius-sm);color:#92400E;font-weight:600;">
+            &#9888; ${missing.length} missing
+        </div>` : ''}
+    </div>`;
+}
+
+// Key Requirements sub-renderers
+
+function renderLegalKeyReqs(rj) {
+    let html = '';
+    const ins = rj.insurance || {};
+    if (ins.gl_minimum || ins.auto_minimum || ins.umbrella_minimum || ins.workers_comp) {
+        html += `<div style="margin-bottom:8px;font-size:12px;">
+            <span style="font-weight:500;">Insurance Minimums:</span>
+            ${ins.gl_minimum ? ` GL $${typeof ins.gl_minimum === 'number' ? fmt(ins.gl_minimum) : ins.gl_minimum}` : ''}
+            ${ins.auto_minimum ? ` Auto $${typeof ins.auto_minimum === 'number' ? fmt(ins.auto_minimum) : ins.auto_minimum}` : ''}
+            ${ins.umbrella_minimum ? ` Umbrella $${typeof ins.umbrella_minimum === 'number' ? fmt(ins.umbrella_minimum) : ins.umbrella_minimum}` : ''}
+        </div>`;
+    }
+    return html;
+}
+
+function renderQAQCKeyReqs(rj) {
+    let html = '';
+    const certs = rj.certifications_required || [];
+    if (certs.length > 0) {
+        html += `<div style="margin-bottom:8px;"><span style="font-size:11px;font-weight:600;">Certifications:</span> `;
+        html += certs.map(c => `<span style="font-size:11px;padding:2px 6px;background:var(--bg-hover);border-radius:4px;margin:0 2px;">${escHtml(c)}</span>`).join('');
+        html += `</div>`;
+    }
+    const subs = rj.submittals_required || [];
+    if (subs.length > 0) {
+        html += `<div style="margin-bottom:8px;font-size:11px;color:var(--text-secondary);">${subs.length} submittals required</div>`;
+    }
+    return html;
+}
+
+function renderSubKeyReqs(rj) {
+    let html = '';
+    const self = rj.self_perform_recommended || [];
+    if (self.length > 0) {
+        html += `<div style="margin-bottom:8px;"><span style="font-size:11px;font-weight:600;">Self-Perform Recommended:</span>`;
+        self.forEach(s => {
+            html += `<div style="font-size:11px;padding:2px 0;margin-left:12px;">${escHtml(s.discipline || '')} — ${escHtml(s.reason || '')}</div>`;
+        });
+        html += `</div>`;
+    }
+    return html;
+}
+
+function renderDocControlKeyReqs(rj) {
+    const changes = rj.addendum_changes || [];
+    if (changes.length === 0) return '';
+    let html = `<div style="margin-bottom:8px;font-size:11px;font-weight:600;">Addendum Changes:</div>`;
+    changes.forEach(c => {
+        html += `<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border-default);">Add. ${c.addendum || '?'}: ${escHtml(c.changes || '')}</div>`;
+    });
+    return html;
+}
+
+// Add to RFI from intelligence finding
+async function addToRFIFromIntel(bidId, questionText) {
+    try {
+        await api(`/bidding/bids/${bidId}/rfi-log`, {
+            method: 'POST',
+            body: JSON.stringify({
+                question: questionText,
+                status: 'pending',
+                notes: 'Added from intelligence finding',
+            }),
+        });
+        alert('Added to RFI Log');
+    } catch (err) {
+        alert('Error adding to RFI: ' + err.message);
     }
 }
 
@@ -4588,304 +4914,35 @@ function toggleAgentReport(agentName) {
     if (arrow) arrow.style.transform = open ? '' : 'rotate(90deg)';
 }
 
-function renderAgentReport(report) {
-    const rj = report.report_json || {};
-    const name = report.agent_name;
+// Legacy agent report renderers kept as stubs for any external callers
+function renderLegalReport(rj) { return ''; }
+function renderDocControlReport(rj) { return ''; }
+function renderQAQCReport(rj) { return ''; }
+function renderSubReport(rj) { return ''; }
+function renderChiefBrief(report) { return ''; }
+function renderAgentReport(report) { return ''; }
 
-    let html = `<div style="margin-top:12px;">`;
+// ── Global Refresh Pipeline ──
 
-    // Summary
-    if (report.summary_text) {
-        html += `<p style="font-size:13px;color:var(--text-secondary);margin:0 0 12px;">${escHtml(report.summary_text)}</p>`;
-    }
-
-    if (name === 'legal_analyst') {
-        html += renderLegalReport(rj);
-    } else if (name === 'document_control') {
-        html += renderDocControlReport(rj);
-    } else if (name === 'qaqc_manager') {
-        html += renderQAQCReport(rj);
-    } else if (name === 'subcontract_manager') {
-        html += renderSubReport(rj);
-    } else {
-        // Generic: show flags
-        const flags = rj.flags || [];
-        if (flags.length) {
-            html += `<ul style="margin:0;padding-left:16px;">`;
-            flags.forEach(f => { html += `<li style="font-size:12px;margin-bottom:4px;">${escHtml(typeof f === 'string' ? f : JSON.stringify(f))}</li>`; });
-            html += `</ul>`;
-        }
-    }
-
-    html += `</div>`;
-    return html;
-}
-
-function renderLegalReport(rj) {
-    let html = '';
-
-    // Bid type
-    if (rj.bid_type) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Bid Type</span><br>
-            <span style="font-size:13px;">${escHtml(rj.bid_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))}</span></div>`;
-    }
-
-    // LDs
-    const ld = rj.liquidated_damages || {};
-    if (ld.has_ld) {
-        html += `<div style="margin-bottom:12px;padding:10px;background:var(--bg-hover);border-radius:8px;">
-            <span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Liquidated Damages</span><br>
-            <span style="font-size:14px;font-weight:600;">${ld.amount_per_day ? '$' + fmt(ld.amount_per_day) + '/day' : 'Amount not specified'}</span>
-            ${ld.cap ? ` — Cap: $${fmt(ld.cap)}` : ' — <span style="color:var(--danger-red);font-weight:600;">NO CAP &#9888;</span>'}
-            ${ld.clause_reference ? `<br><span style="font-size:11px;color:var(--text-tertiary);">Ref: ${escHtml(ld.clause_reference)}</span>` : ''}
-        </div>`;
-    }
-
-    // Bonding
-    const bond = rj.bonding || {};
-    if (bond.bid_bond || bond.performance_bond || bond.payment_bond) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Bonding</span><br>
-            <span style="font-size:12px;">
-                Bid: ${bond.bid_bond ? '&#10003;' : '&#10005;'} &nbsp;
-                Performance: ${bond.performance_bond ? '&#10003;' : '&#10005;'} &nbsp;
-                Payment: ${bond.payment_bond ? '&#10003;' : '&#10005;'}
-                ${bond.estimated_cost_pct ? ` — Est. ${bond.estimated_cost_pct}%` : ''}
-            </span></div>`;
-    }
-
-    // Payment + Retainage
-    const pay = rj.payment_terms || {};
-    const ret = rj.retainage || {};
-    if (pay.frequency || ret.percentage) {
-        html += `<div style="margin-bottom:12px;font-size:12px;">`;
-        if (pay.frequency) html += `Payment: ${escHtml(pay.frequency)}${pay.net_days ? `, Net ${pay.net_days}` : ''} &nbsp;`;
-        if (ret.percentage) html += `Retainage: ${ret.percentage}%`;
-        html += `</div>`;
-    }
-
-    // Key Risks
-    const risks = rj.key_risks || [];
-    if (risks.length) {
-        html += `<div style="margin-bottom:8px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Key Risks</span></div>`;
-        risks.forEach(r => {
-            const color = r.severity === 'critical' || r.severity === 'high' ? 'var(--danger-red)' : r.severity === 'medium' ? '#F59E0B' : 'var(--text-tertiary)';
-            html += `<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;font-size:12px;">
-                <span style="color:${color};font-weight:700;min-width:16px;">&#9679;</span>
-                <div><span style="font-weight:500;">${escHtml(r.risk || '')}</span>
-                    ${r.clause ? `<span style="color:var(--text-tertiary);"> (${escHtml(r.clause)})</span>` : ''}
-                    ${r.recommendation ? `<br><span style="color:var(--text-secondary);font-style:italic;">${escHtml(r.recommendation)}</span>` : ''}
-                </div>
-            </div>`;
-        });
-    }
-
-    // Flags
-    const flags = rj.flags || [];
-    if (flags.length) {
-        html += `<div style="margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.05);border-radius:6px;">`;
-        flags.forEach(f => { html += `<div style="font-size:12px;color:#991B1B;margin-bottom:2px;">&#9888; ${escHtml(f)}</div>`; });
-        html += `</div>`;
-    }
-
-    return html;
-}
-
-function renderDocControlReport(rj) {
-    let html = '';
-
-    // Document index
-    const docs = rj.document_index || [];
-    if (docs.length) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Documents Reviewed (${rj.documents_reviewed || docs.length})</span>
-        <div style="max-height:200px;overflow-y:auto;margin-top:4px;">`;
-        docs.forEach(d => {
-            html += `<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border-default);">
-                <span style="font-weight:500;">${escHtml(d.filename || '')}</span>
-                ${d.category ? ` <span style="color:var(--text-tertiary);">[${escHtml(d.category)}]</span>` : ''}
-            </div>`;
-        });
-        html += `</div></div>`;
-    }
-
-    // Addendum changes
-    const changes = rj.addendum_changes || [];
-    if (changes.length) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Addendum Changes</span>`;
-        changes.forEach(c => {
-            html += `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--border-default);">
-                <span style="font-weight:500;">Addendum ${c.addendum || '?'}</span> — ${escHtml(c.changes || '')}
-                ${c.impact ? `<br><span style="color:var(--text-secondary);font-style:italic;">${escHtml(c.impact)}</span>` : ''}
-            </div>`;
-        });
-        html += `</div>`;
-    }
-
-    // Missing documents
-    const missing = rj.missing_documents || [];
-    if (missing.length) {
-        html += `<div style="margin-bottom:8px;padding:8px 12px;background:rgba(245,158,11,0.05);border-radius:6px;">
-            <span style="font-size:11px;font-weight:600;color:#92400E;">Missing Documents</span>`;
-        missing.forEach(m => { html += `<div style="font-size:12px;color:#92400E;margin-top:2px;">&#9888; ${escHtml(m)}</div>`; });
-        html += `</div>`;
-    }
-
-    return html;
-}
-
-function renderQAQCReport(rj) {
-    let html = '';
-
-    // Testing requirements
-    const tests = rj.testing_requirements || [];
-    if (tests.length) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Testing Requirements (${tests.length})</span>
-        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px;">
-            <tr style="background:var(--bg-hover);"><th style="padding:4px 8px;text-align:left;">Test</th><th style="padding:4px 8px;text-align:left;">Frequency</th><th style="padding:4px 8px;text-align:left;">Spec</th><th style="padding:4px 8px;text-align:center;">Impact</th></tr>
-            ${tests.map(t => `<tr style="border-bottom:1px solid var(--border-default);">
-                <td style="padding:4px 8px;">${escHtml(t.test || '')}</td>
-                <td style="padding:4px 8px;">${escHtml(t.frequency || '')}</td>
-                <td style="padding:4px 8px;color:var(--text-tertiary);">${escHtml(t.spec_section || '')}</td>
-                <td style="padding:4px 8px;text-align:center;">${t.cost_impact === 'high' ? '<span style="color:var(--danger-red);font-weight:600;">HIGH</span>' : t.cost_impact === 'moderate' ? '<span style="color:#F59E0B;">MOD</span>' : '<span style="color:var(--text-tertiary);">LOW</span>'}</td>
-            </tr>`).join('')}
-        </table></div>`;
-    }
-
-    // Certifications
-    const certs = rj.certifications_required || [];
-    if (certs.length) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Certifications Required</span>
-        <ul style="margin:4px 0;padding-left:16px;">`;
-        certs.forEach(c => { html += `<li style="font-size:12px;">${escHtml(c)}</li>`; });
-        html += `</ul></div>`;
-    }
-
-    // Submittals
-    const subs = rj.submittals_required || [];
-    if (subs.length) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Submittals (${subs.length})</span>
-        <div style="margin-top:4px;">`;
-        subs.forEach(s => {
-            html += `<div style="font-size:12px;padding:3px 0;">${escHtml(s.item || '')} ${s.spec_section ? `<span style="color:var(--text-tertiary);">[${escHtml(s.spec_section)}]</span>` : ''} ${s.advance_days ? `<span style="color:var(--text-secondary);">— ${s.advance_days}d advance</span>` : ''}</div>`;
-        });
-        html += `</div></div>`;
-    }
-
-    // Flags
-    const flags = rj.flags || [];
-    if (flags.length) {
-        html += `<div style="padding:8px 12px;background:rgba(239,68,68,0.05);border-radius:6px;">`;
-        flags.forEach(f => { html += `<div style="font-size:12px;color:#991B1B;margin-bottom:2px;">&#9888; ${escHtml(f)}</div>`; });
-        html += `</div>`;
-    }
-
-    return html;
-}
-
-function renderSubReport(rj) {
-    let html = '';
-
-    // Recommended sub scopes
-    const subs = rj.recommended_sub_scopes || [];
-    if (subs.length) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Recommended Subcontract Scopes</span>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px;margin-top:8px;">`;
-        subs.forEach(s => {
-            html += `<div style="padding:10px;border:1px solid var(--border-default);border-radius:8px;font-size:12px;">
-                <div style="font-weight:600;margin-bottom:4px;">${escHtml(s.discipline || '')}</div>
-                <div style="color:var(--text-secondary);margin-bottom:4px;">${escHtml(s.scope_summary || '')}</div>
-                ${s.sov_items && s.sov_items.length ? `<div style="color:var(--text-tertiary);">SOV Items: ${s.sov_items.join(', ')}</div>` : ''}
-                ${s.estimated_value_pct ? `<div style="color:var(--text-tertiary);">~${s.estimated_value_pct}% of bid</div>` : ''}
-                ${(s.special_requirements || []).length ? `<div style="color:#92400E;margin-top:4px;">${s.special_requirements.map(r => escHtml(r)).join(', ')}</div>` : ''}
-            </div>`;
-        });
-        html += `</div></div>`;
-    }
-
-    // Self-perform
-    const self = rj.self_perform_recommended || [];
-    if (self.length) {
-        html += `<div style="margin-bottom:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">Self-Perform Recommended</span>
-        <ul style="margin:4px 0;padding-left:16px;">`;
-        self.forEach(s => {
-            html += `<li style="font-size:12px;margin-bottom:4px;"><span style="font-weight:500;">${escHtml(s.discipline || '')}</span> — ${escHtml(s.reason || '')}</li>`;
-        });
-        html += `</ul></div>`;
-    }
-
-    // Flags
-    const flags = rj.flags || [];
-    if (flags.length) {
-        html += `<div style="padding:8px 12px;background:rgba(239,68,68,0.05);border-radius:6px;">`;
-        flags.forEach(f => { html += `<div style="font-size:12px;color:#991B1B;margin-bottom:2px;">&#9888; ${escHtml(f)}</div>`; });
-        html += `</div>`;
-    }
-
-    return html;
-}
-
-function renderChiefBrief(report) {
-    const rj = report.report_json || {};
-    const sovIntel = rj.sov_intelligence || [];
-    let html = '';
-
-    if (sovIntel.length === 0) {
-        return '<p style="font-size:13px;color:var(--text-tertiary);">No SOV-specific intelligence available. Run sub-agents with SOV items populated.</p>';
-    }
-
-    html += `<div style="font-size:13px;">`;
-    sovIntel.forEach(item => {
-        html += `<div style="margin-bottom:12px;padding:10px;border:1px solid var(--border-default);border-radius:8px;">
-            <div style="font-weight:600;margin-bottom:4px;">Item ${escHtml(item.item_number || '?')}: ${escHtml(item.description || '')}</div>`;
-        (item.findings || []).forEach(f => {
-            const icon = f.source === 'qaqc_manager' ? '&#128270;' : f.source === 'subcontract_manager' ? '&#128736;' : f.source === 'legal_analyst' ? '&#9878;' : '&#128196;';
-            html += `<div style="font-size:12px;color:var(--text-secondary);padding:2px 0 2px 8px;border-left:2px solid var(--border-default);margin:4px 0;">
-                ${icon} <span style="font-weight:500;text-transform:capitalize;">${escHtml(f.source.replace(/_/g, ' '))}:</span> ${escHtml(f.detail || '')}
-            </div>`;
-        });
-        html += `</div>`;
-    });
-    html += `</div>`;
-
-    // All flags
-    const allFlags = rj.all_flags || [];
-    if (allFlags.length) {
-        html += `<div style="margin-top:12px;"><span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;">All Flags (${allFlags.length})</span>`;
-        allFlags.forEach(f => {
-            html += `<div style="font-size:12px;color:#991B1B;padding:2px 0;">&#9888; <span style="color:var(--text-tertiary);">[${escHtml(f.source.replace(/_/g, ' '))}]</span> ${escHtml(f.flag)}</div>`;
-        });
-        html += `</div>`;
-    }
-
-    return html;
-}
-
-async function runAllAgents(bidId) {
-    const btn = document.getElementById('runAllBtn');
-    btn.disabled = true;
-    btn.textContent = 'Running...';
-
-    // Insert progress bar after the action bar
-    const tc = document.getElementById('bidTabContent');
-    let progressEl = document.getElementById('agentProgress');
-    if (!progressEl) {
-        progressEl = document.createElement('div');
-        progressEl.id = 'agentProgress';
-        progressEl.style.cssText = 'margin:12px 0;';
-        tc.insertBefore(progressEl, tc.children[1] || null);
-    }
-    progressEl.innerHTML = renderProgressBar(0, 1, 'Starting agents...', 'agent');
+async function refreshIntelligence(bidId) {
+    const btn = document.getElementById('globalRefreshBtn');
+    const prog = document.getElementById('refreshProgress');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Refreshing...'; }
+    if (prog) prog.innerHTML = renderProgressBar(0, 1, 'Starting intelligence refresh...', 'refresh');
 
     try {
+        const startTime = Date.now();
         await new Promise((resolve, reject) => {
-            const startTime = Date.now();
-            const evtSource = new EventSource(`/api/bidding/bids/${bidId}/analyze-stream`);
+            const evtSource = new EventSource(`/api/bidding/bids/${bidId}/refresh-stream`);
             evtSource.onmessage = (event) => {
                 try {
                     const msg = JSON.parse(event.data);
-                    if (msg.type === 'progress') {
+                    if (msg.type === 'stage') {
                         const elapsed = Math.round((Date.now() - startTime) / 1000);
-                        const timeStr = elapsed > 60 ? `${Math.floor(elapsed/60)}m ${elapsed%60}s` : `${elapsed}s`;
-                        progressEl.innerHTML = renderProgressBar(msg.current, msg.total, `Running ${msg.agent} (${msg.current} of ${msg.total}) — ${timeStr} elapsed`, 'agent');
+                        if (prog) prog.innerHTML = renderProgressBar(-1, 1, `${msg.message} (${elapsed}s)`, 'refresh');
+                    } else if (msg.type === 'progress') {
+                        const elapsed = Math.round((Date.now() - startTime) / 1000);
+                        if (prog) prog.innerHTML = renderProgressBar(msg.current, msg.total, `${msg.stage}: ${msg.agent || ''} (${msg.current}/${msg.total}) — ${elapsed}s`, 'refresh');
                     } else if (msg.type === 'done') {
                         evtSource.close();
                         resolve(msg.result);
@@ -4895,67 +4952,38 @@ async function runAllAgents(bidId) {
                     }
                 } catch (e) { evtSource.close(); reject(e); }
             };
-            evtSource.onerror = (e) => {
-                if (evtSource.readyState === EventSource.CLOSED) {
-                    reject(new Error('Connection lost'));
-                }
-            };
+            evtSource.onerror = () => { evtSource.close(); reject(new Error('Connection lost')); };
         });
 
-        progressEl.innerHTML = renderProgressBar(1, 1, 'All agents complete!', 'agent', true);
-        setTimeout(() => { if (progressEl.parentNode) progressEl.remove(); }, 3000);
-
-        const bid = await api(`/bidding/bids/${bidId}`);
-        renderBidIntelligence(bid);
-
-        // Re-insert the progress complete message and map banner
-        const banner = document.createElement('div');
-        banner.style.cssText = 'padding:10px 16px;margin-top:12px;background:var(--bg-selected);border:1px solid var(--wollam-navy);border-radius:var(--radius-sm);display:flex;align-items:center;gap:12px;';
-        banner.innerHTML = `
-            <span style="font-size:13px;color:var(--text-primary);">Agents complete. Map intelligence findings to bid items?</span>
-            <button class="btn btn-primary btn-sm" onclick="switchBidTab('sov',${bidId});setTimeout(()=>mapSOVIntelligence(${bidId}),300);">Map to SOV Items</button>
-            <button class="btn btn-sm" onclick="this.parentElement.remove()">Dismiss</button>
-        `;
-        document.getElementById('bidTabContent').appendChild(banner);
+        if (prog) prog.innerHTML = renderProgressBar(1, 1, 'Refresh complete!', 'refresh', true);
+        setTimeout(() => { if (prog) prog.innerHTML = ''; }, 3000);
+        loadBidDetail(bidId);
     } catch (err) {
-        progressEl.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'agent', false, true);
-        btn.disabled = false;
-        btn.textContent = 'Run All Agents';
+        if (prog) prog.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'refresh', false, true);
+        if (btn) { btn.disabled = false; btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Refresh Intelligence'; }
     }
 }
 
-async function runSingleAgent(bidId) {
-    const select = document.getElementById('singleAgentSelect');
-    const agentName = select.value;
-    if (!agentName) { alert('Select an agent first'); return; }
+// Legacy run functions call refresh
+async function runAllAgents(bidId) { return refreshIntelligence(bidId); }
+async function runSingleAgent(bidId) { return refreshIntelligence(bidId); }
 
-    const runBtn = select.nextElementSibling;
-    select.disabled = true;
-    if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Running...'; }
-
-    // Show indeterminate progress
-    const tc = document.getElementById('bidTabContent');
-    let progressEl = document.getElementById('agentProgress');
-    if (!progressEl) {
-        progressEl = document.createElement('div');
-        progressEl.id = 'agentProgress';
-        progressEl.style.cssText = 'margin:12px 0;';
-        tc.insertBefore(progressEl, tc.children[1] || null);
-    }
-    progressEl.innerHTML = renderProgressBar(-1, 1, `Running ${agentName.replace(/_/g, ' ')}...`, 'agent');
-
-    try {
-        await api(`/bidding/bids/${bidId}/analyze/${agentName}`, { method: 'POST' });
-        progressEl.innerHTML = renderProgressBar(1, 1, 'Agent complete!', 'agent', true);
-        setTimeout(() => { if (progressEl.parentNode) progressEl.remove(); }, 2000);
-        const bid = await api(`/bidding/bids/${bidId}`);
-        renderBidIntelligence(bid);
-    } catch (err) {
-        progressEl.innerHTML = renderProgressBar(0, 1, 'Error: ' + err.message, 'agent', false, true);
-        select.disabled = false;
-        if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run'; }
-    }
+// Show banner after sync with changes
+function showRefreshBanner(bidId, newCount, updatedCount) {
+    const banner = document.getElementById('refreshBanner');
+    if (!banner) return;
+    if (newCount === 0 && updatedCount === 0) return;
+    banner.innerHTML = `
+        <div class="card" style="padding:10px 16px;margin-bottom:12px;border-left:3px solid var(--wollam-navy);background:rgba(0,52,126,0.04);display:flex;align-items:center;gap:12px;">
+            <span style="font-size:13px;color:var(--text-primary);">${newCount + updatedCount} document change(s) detected. Refresh intelligence?</span>
+            <button class="btn btn-primary btn-sm" onclick="refreshIntelligence(${bidId});this.parentElement.parentElement.innerHTML='';">Refresh Now</button>
+            <button class="btn btn-sm" onclick="this.parentElement.parentElement.innerHTML='';">Dismiss</button>
+        </div>
+    `;
 }
+
+// OLD AGENT RENDERERS REMOVED — replaced by renderAgentContent with priority sections
+// (keeping this comment as a marker)
 
 // ── Rate Lookup (SOV) ──
 

@@ -951,3 +951,63 @@ class TestRFILog:
     def test_delete_rfi_not_found(self):
         res = client.delete("/api/bidding/rfi-log/99999")
         assert res.status_code == 404
+
+
+# ══════════════════════════════════════════════════════════════
+# PART C TESTS — Intelligence, Setup Progress, Refresh Pipeline
+# ══════════════════════════════════════════════════════════════
+
+
+class TestSetupProgress:
+
+    def test_empty_bid_progress(self):
+        bid = create_test_bid()
+        res = client.get(f"/api/bidding/bids/{bid['id']}/setup-progress")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["documents_synced"] is False
+        assert data["sov_defined"] is False
+        assert data["scope_designated"] is False
+        assert data["intelligence_analyzed"] is False
+        assert data["intelligence_mapped"] is False
+
+    def test_progress_with_docs_and_sov(self):
+        bid = create_test_bid()
+        # Add a document
+        from io import BytesIO
+        client.post(
+            f"/api/bidding/bids/{bid['id']}/documents",
+            files={"file": ("test.txt", BytesIO(b"content"), "text/plain")},
+            data={"doc_category": "general"},
+        )
+        # Add an SOV item
+        client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Test item"})
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/setup-progress")
+        data = res.json()
+        assert data["documents_synced"] is True
+        assert data["sov_defined"] is True
+        assert data["counts"]["documents"] == 1
+        assert data["counts"]["sov_items"] == 1
+
+    def test_progress_with_scoped_items(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Test"}).json()
+        client.put(f"/api/bidding/sov/{item['id']}", json={"work_type": "self_perform"})
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/setup-progress")
+        data = res.json()
+        assert data["scope_designated"] is True
+        assert data["counts"]["scoped_items"] == 1
+
+    def test_progress_not_found(self):
+        res = client.get("/api/bidding/bids/99999/setup-progress")
+        assert res.status_code == 404
+
+
+class TestRefreshPipeline:
+
+    def test_refresh_stream_bid_not_found(self):
+        """Refresh endpoint returns 404 for invalid bid."""
+        res = client.get("/api/bidding/bids/99999/refresh-stream")
+        assert res.status_code == 404

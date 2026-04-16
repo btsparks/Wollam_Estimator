@@ -289,3 +289,145 @@ async def get_document_changes(doc_id: int):
     if result is None:
         return {"doc_id": doc_id, "has_changes": False}
     return {"doc_id": doc_id, "has_changes": True, "changes": result}
+
+
+# ── Global Refresh Pipeline ──────────────────────────────────
+
+
+@router.get("/bids/{bid_id}/setup-progress")
+async def bid_setup_progress(bid_id: int):
+    """Get bid setup completion status for workflow guidance."""
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT * FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+
+        doc_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bid_documents WHERE bid_id = ?", (bid_id,)
+        ).fetchone()["cnt"]
+        sov_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bid_sov_item WHERE bid_id = ?", (bid_id,)
+        ).fetchone()["cnt"]
+        scoped_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bid_sov_item WHERE bid_id = ? AND work_type != 'undecided'", (bid_id,)
+        ).fetchone()["cnt"]
+        report_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM agent_reports WHERE bid_id = ? AND status = 'complete'", (bid_id,)
+        ).fetchone()["cnt"]
+        mapped_count = conn.execute(
+            "SELECT COUNT(DISTINCT sov_item_id) as cnt FROM sov_item_intelligence WHERE bid_id = ?", (bid_id,)
+        ).fetchone()["cnt"]
+
+        return {
+            "documents_synced": doc_count > 0,
+            "sov_defined": sov_count > 0,
+            "scope_designated": scoped_count > 0,
+            "intelligence_analyzed": report_count > 0,
+            "intelligence_mapped": mapped_count > 0,
+            "counts": {
+                "documents": doc_count,
+                "sov_items": sov_count,
+                "scoped_items": scoped_count,
+                "agent_reports": report_count,
+                "mapped_items": mapped_count,
+            },
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/bids/{bid_id}/refresh-stream")
+async def refresh_intelligence_stream(bid_id: int):
+    """Global refresh pipeline with SSE streaming progress."""
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT id FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+    finally:
+        conn.close()
+
+    q: queue.Queue = queue.Queue()
+
+    def run_pipeline():
+        try:
+            # Stage 1: Run all agents
+            q.put(json.dumps({"type": "stage", "stage": "agents", "message": "Running intelligence agents..."}))
+
+            def agent_progress(current, total, agent_name, status):
+                q.put(json.dumps({
+                    "type": "progress", "stage": "agents",
+                    "current": current, "total": total,
+                    "agent": agent_name, "status": status,
+                }))
+
+            agent_result = run_all_agents(bid_id, on_progress=agent_progress)
+            agents_run = len(agent_result.get("agents", {}))
+
+            # Stage 2: Rebuild drawing/spec registers
+            q.put(json.dumps({"type": "stage", "stage": "registers", "message": "Building drawing & spec registers..."}))
+            drawings_found = 0
+            specs_found = 0
+            try:
+                from app.services.register_builder import build_drawing_register, build_spec_register
+                dr = build_drawing_register(bid_id)
+                drawings_found = dr.get("created", 0) + dr.get("updated", 0)
+                sr = build_spec_register(bid_id)
+                specs_found = sr.get("created", 0) + sr.get("updated", 0)
+            except Exception as e:
+                logger.warning("Register rebuild failed: %s", e)
+
+            # Stage 3: Rebuild RFI log
+            q.put(json.dumps({"type": "stage", "stage": "rfi", "message": "Parsing RFI documents..."}))
+            rfis_parsed = 0
+            try:
+                from app.services.rfi_parser import build_rfi_log
+                rr = build_rfi_log(bid_id)
+                rfis_parsed = rr.get("created", 0)
+            except Exception as e:
+                logger.warning("RFI rebuild failed: %s", e)
+
+            # Stage 4: Map intelligence to SOV items
+            q.put(json.dumps({"type": "stage", "stage": "mapping", "message": "Mapping intelligence to SOV items..."}))
+            items_mapped = 0
+            try:
+                from app.services.sov_mapper import map_intelligence_to_sov
+                mr = map_intelligence_to_sov(bid_id)
+                items_mapped = mr.get("items_mapped", 0)
+            except Exception as e:
+                logger.warning("SOV mapping failed: %s", e)
+
+            q.put(json.dumps({
+                "type": "done",
+                "result": {
+                    "agents_run": agents_run,
+                    "drawings_found": drawings_found,
+                    "specs_found": specs_found,
+                    "rfis_parsed": rfis_parsed,
+                    "items_mapped": items_mapped,
+                },
+            }))
+        except Exception as e:
+            logger.error("Refresh pipeline failed: %s", e, exc_info=True)
+            q.put(json.dumps({"type": "error", "message": str(e)}))
+
+    thread = threading.Thread(target=run_pipeline, daemon=True)
+    thread.start()
+
+    async def event_generator():
+        while True:
+            try:
+                msg = q.get(timeout=2)
+                yield f"data: {msg}\n\n"
+                parsed = json.loads(msg)
+                if parsed.get("type") in ("done", "error"):
+                    break
+            except queue.Empty:
+                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
