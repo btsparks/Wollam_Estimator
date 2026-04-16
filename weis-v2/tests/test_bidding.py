@@ -1341,3 +1341,111 @@ class TestVendorSuggestion:
         vendors = res.json()
         assert len(vendors) >= 1
         assert vendors[0]["company"] == "Suggest Electric"
+
+
+# ══════════════════════════════════════════════════════════════
+# INTEGRATION TESTS — Cross-Feature Consistency
+# ══════════════════════════════════════════════════════════════
+
+
+class TestCrossFeatureIntegration:
+
+    def test_sov_count_excludes_out_of_scope(self):
+        """Bid detail sov_count should only count in-scope items."""
+        bid = create_test_bid()
+        in_s = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "In scope"}).json()
+        out_s = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Out scope"}).json()
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/set-scope", json={
+            "item_ids": [out_s["id"]], "in_scope": 0,
+        })
+
+        detail = client.get(f"/api/bidding/bids/{bid['id']}").json()
+        assert detail["sov_count"] == 1  # Only in-scope counted
+
+    def test_sov_list_returns_both_scopes(self):
+        """SOV list API returns both in-scope and out-of-scope items (frontend splits them)."""
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "In"})
+        out = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Out"}).json()
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/set-scope", json={
+            "item_ids": [out["id"]], "in_scope": 0,
+        })
+
+        items = client.get(f"/api/bidding/bids/{bid['id']}/sov").json()
+        assert len(items) == 2  # Both returned for frontend rendering
+
+    def test_setup_progress_end_to_end(self):
+        """Verify setup progress accurately tracks workflow steps."""
+        bid = create_test_bid()
+
+        # Step 1: No docs, no SOV
+        sp = client.get(f"/api/bidding/bids/{bid['id']}/setup-progress").json()
+        assert sp["documents_synced"] is False
+        assert sp["sov_defined"] is False
+
+        # Step 2: Add a document
+        from io import BytesIO
+        client.post(
+            f"/api/bidding/bids/{bid['id']}/documents",
+            files={"file": ("test.txt", BytesIO(b"test"), "text/plain")},
+            data={"doc_category": "general"},
+        )
+        sp = client.get(f"/api/bidding/bids/{bid['id']}/setup-progress").json()
+        assert sp["documents_synced"] is True
+        assert sp["sov_defined"] is False
+
+        # Step 3: Add SOV item
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Test"}).json()
+        sp = client.get(f"/api/bidding/bids/{bid['id']}/setup-progress").json()
+        assert sp["sov_defined"] is True
+        assert sp["scope_designated"] is False
+
+        # Step 4: Set work_type
+        client.put(f"/api/bidding/sov/{item['id']}", json={"work_type": "self_perform"})
+        sp = client.get(f"/api/bidding/bids/{bid['id']}/setup-progress").json()
+        assert sp["scope_designated"] is True
+
+    def test_work_type_flows_to_procurement_gap(self):
+        """Only subcontract items should generate procurement gaps, not self_perform."""
+        bid = create_test_bid()
+        sp_item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Self Perform Work"}).json()
+        sub_item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Sub Work"}).json()
+        und_item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Undecided Work"}).json()
+
+        client.put(f"/api/bidding/sov/{sp_item['id']}", json={"work_type": "self_perform"})
+        client.put(f"/api/bidding/sov/{sub_item['id']}", json={"work_type": "subcontract"})
+        # und_item stays 'undecided'
+
+        result = client.post(f"/api/bidding/bids/{bid['id']}/procurement/analyze-gaps").json()
+        sov_ids_suggested = set()
+        for s in result["suggestions"]:
+            sov_ids_suggested.update(s.get("related_sov_items", []))
+
+        # Only subcontract item should appear
+        assert sub_item["id"] in sov_ids_suggested
+        assert sp_item["id"] not in sov_ids_suggested
+        assert und_item["id"] not in sov_ids_suggested
+
+    def test_group_count_now_counts_sections(self):
+        """group_count in bid detail should now count bid_section, not pricing_group."""
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "Division 1"})
+        client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "Division 2"})
+
+        detail = client.get(f"/api/bidding/bids/{bid['id']}").json()
+        assert detail["group_count"] == 2
+
+    def test_document_tree_builds_correctly(self):
+        """Document tree should organize docs into folders."""
+        bid = create_test_bid()
+        from io import BytesIO
+        for cat in ["drawing", "spec", "contract"]:
+            client.post(
+                f"/api/bidding/bids/{bid['id']}/documents",
+                files={"file": (f"test_{cat}.pdf", BytesIO(b"content"), "application/pdf")},
+                data={"doc_category": cat},
+            )
+
+        tree = client.get(f"/api/bidding/bids/{bid['id']}/documents/tree").json()
+        assert tree["stats"]["total_documents"] == 3
+        assert len(tree["tree"]) >= 1  # At least one folder

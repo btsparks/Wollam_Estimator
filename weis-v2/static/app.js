@@ -3272,10 +3272,11 @@ async function renderBidSOV(bidId) {
     tc.innerHTML = '<div class="empty-state"><p>Loading schedule...</p></div>';
 
     try {
-        const [items, sections, intelSummary] = await Promise.all([
+        const [items, sections, intelSummary, procItems] = await Promise.all([
             api(`/bidding/bids/${bidId}/sov`),
             api(`/bidding/bids/${bidId}/sections`),
             api(`/bidding/bids/${bidId}/sov/intelligence-summary`).catch(() => []),
+            api(`/bidding/bids/${bidId}/procurement`).catch(() => []),
         ]);
 
         // Build lookup maps
@@ -3283,6 +3284,11 @@ async function renderBidSOV(bidId) {
         intelSummary.forEach(s => { intelMap[s.sov_item_id] = s; });
         const hasIntel = intelSummary.length > 0;
         const hasStaleIntel = intelSummary.some(s => s.is_stale);
+
+        // Build set of SOV item IDs that have procurement links
+        const procLinkedSovIds = new Set();
+        (procItems || []).forEach(p => (p.sov_links || []).forEach(l => procLinkedSovIds.add(l.sov_item_id)));
+        window._procLinkedSovIds = procLinkedSovIds;
 
         // Split items: in-scope vs out-of-scope
         const inScopeItems = items.filter(i => i.in_scope !== 0);
@@ -3431,6 +3437,8 @@ function renderSOVItemRow(item, bidId, intelMap, sectionId) {
     const isHolding = item.is_holding_account === 1;
     const holdingBg = isHolding ? 'background:rgba(6,182,212,0.04);' : '';
     const isSelected = window._sovSelectedIds && window._sovSelectedIds.has(item.id);
+    const needsProcurement = wt === 'subcontract' && window._procLinkedSovIds && !window._procLinkedSovIds.has(item.id);
+    const procWarning = needsProcurement ? `<span onclick="event.stopPropagation();switchBidTab('procurement',${bidId});" style="color:#F59E0B;font-size:11px;cursor:pointer;" title="Subcontract item with no procurement link — click to open Procurement tab">&#9888;</span>` : '';
 
     return `
     <tr style="${leftBorder ? `border-left:${leftBorder};` : ''}border-bottom:1px solid var(--border-default);cursor:pointer;${holdingBg}" id="sov-row-${item.id}" class="sov-item-row ${sectionId ? `section-${sectionId}` : 'section-unsectioned'}" onclick="toggleSOVItemDetail(${item.id}, ${bidId})">
@@ -3442,7 +3450,7 @@ function renderSOVItemRow(item, bidId, intelMap, sectionId) {
             <span class="sov-hcss-editable" onclick="editHCSSNumber(${item.id}, ${bidId}, this)" style="cursor:text;min-width:30px;display:inline-block;color:${item.hcss_number ? 'var(--text-primary)' : 'var(--text-tertiary)'};">${escHtml(item.hcss_number || '—')}</span>
         </td>
         <td style="padding:6px 8px;">
-            ${escHtml(item.description)}
+            ${escHtml(item.description)} ${procWarning}
             ${isHolding ? `<br><span style="font-size:10px;color:var(--text-tertiary);font-style:italic;">&#9881; ${escHtml(item.holding_description || 'Holding account')}</span>` : ''}
         </td>
         <td style="padding:6px 8px;text-align:center;" onclick="event.stopPropagation();">

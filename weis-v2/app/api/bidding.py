@@ -236,7 +236,7 @@ async def list_bids(status: Optional[str] = Query(None)):
                 (b["id"],),
             ).fetchone()["cnt"]
             sov_count = conn.execute(
-                "SELECT COUNT(*) as cnt FROM bid_sov_item WHERE bid_id = ?",
+                "SELECT COUNT(*) as cnt FROM bid_sov_item WHERE bid_id = ? AND COALESCE(in_scope, 1) = 1",
                 (b["id"],),
             ).fetchone()["cnt"]
             bid["doc_count"] = doc_count
@@ -319,10 +319,10 @@ async def get_bid(bid_id: int):
             "SELECT COUNT(*) as cnt FROM bid_documents WHERE bid_id = ?", (bid_id,)
         ).fetchone()["cnt"]
         bid["sov_count"] = conn.execute(
-            "SELECT COUNT(*) as cnt FROM bid_sov_item WHERE bid_id = ?", (bid_id,)
+            "SELECT COUNT(*) as cnt FROM bid_sov_item WHERE bid_id = ? AND COALESCE(in_scope, 1) = 1", (bid_id,)
         ).fetchone()["cnt"]
         bid["group_count"] = conn.execute(
-            "SELECT COUNT(*) as cnt FROM pricing_group WHERE bid_id = ?", (bid_id,)
+            "SELECT COUNT(*) as cnt FROM bid_section WHERE bid_id = ?", (bid_id,)
         ).fetchone()["cnt"]
         return bid
     finally:
@@ -1189,11 +1189,10 @@ async def list_sov(bid_id: int):
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT s.*, pg.name as group_name,
+            """SELECT s.*,
                       bs.name as section_name, bs.sort_order as section_sort_order,
                       bs.collapsed as section_collapsed
                FROM bid_sov_item s
-               LEFT JOIN pricing_group pg ON s.pricing_group_id = pg.id
                LEFT JOIN bid_section bs ON s.section_id = bs.id
                WHERE s.bid_id = ?
                ORDER BY s.sort_order ASC""",
