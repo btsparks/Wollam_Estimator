@@ -4926,14 +4926,6 @@ function toggleAgentReport(agentName) {
     if (arrow) arrow.style.transform = open ? '' : 'rotate(90deg)';
 }
 
-// Legacy agent report renderers kept as stubs for any external callers
-function renderLegalReport(rj) { return ''; }
-function renderDocControlReport(rj) { return ''; }
-function renderQAQCReport(rj) { return ''; }
-function renderSubReport(rj) { return ''; }
-function renderChiefBrief(report) { return ''; }
-function renderAgentReport(report) { return ''; }
-
 // ── Global Refresh Pipeline ──
 
 async function refreshIntelligence(bidId) {
@@ -4976,9 +4968,6 @@ async function refreshIntelligence(bidId) {
     }
 }
 
-// Legacy run functions call refresh
-async function runAllAgents(bidId) { return refreshIntelligence(bidId); }
-async function runSingleAgent(bidId) { return refreshIntelligence(bidId); }
 
 // Show banner after sync with changes
 function showRefreshBanner(bidId, newCount, updatedCount) {
