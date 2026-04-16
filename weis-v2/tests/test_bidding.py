@@ -1449,3 +1449,92 @@ class TestCrossFeatureIntegration:
         tree = client.get(f"/api/bidding/bids/{bid['id']}/documents/tree").json()
         assert tree["stats"]["total_documents"] == 3
         assert len(tree["tree"]) >= 1  # At least one folder
+
+    def test_sov_update_all_part_a_fields(self):
+        """PUT /sov/{item_id} should update all Part A fields in one call."""
+        bid = create_test_bid()
+        sec = client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "Div 3"}).json()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Test"}).json()
+
+        res = client.put(f"/api/bidding/sov/{item['id']}", json={
+            "hcss_number": "3.01.001",
+            "work_type": "self_perform",
+            "section_id": sec["id"],
+            "description": "Updated Concrete Work",
+            "quantity": 250.0,
+            "unit": "CY",
+            "notes": "Include pump truck",
+        })
+        assert res.status_code == 200
+        updated = res.json()
+        assert updated["hcss_number"] == "3.01.001"
+        assert updated["work_type"] == "self_perform"
+        assert updated["section_id"] == sec["id"]
+        assert updated["description"] == "Updated Concrete Work"
+        assert updated["quantity"] == 250.0
+        assert updated["unit"] == "CY"
+        assert updated["notes"] == "Include pump truck"
+
+    def test_sov_update_holding_fields(self):
+        """PUT /sov/{item_id} should handle holding account fields."""
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Equipment"}).json()
+
+        res = client.put(f"/api/bidding/sov/{item['id']}", json={
+            "is_holding_account": 1,
+            "holding_description": "crane, man lifts, forklift",
+        })
+        assert res.status_code == 200
+        assert res.json()["is_holding_account"] == 1
+        assert res.json()["holding_description"] == "crane, man lifts, forklift"
+
+    def test_sov_update_clear_nullable_fields(self):
+        """PUT /sov/{item_id} should allow clearing nullable fields to None."""
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={
+            "description": "Test",
+            "hcss_number": "5.01",
+        }).json()
+        assert item["hcss_number"] == "5.01"
+
+        # Clear hcss_number by setting to None
+        res = client.put(f"/api/bidding/sov/{item['id']}", json={"hcss_number": None})
+        assert res.status_code == 200
+        assert res.json()["hcss_number"] is None
+
+    def test_section_sort_order_auto_increments(self):
+        """Creating sections without sort_order should auto-increment."""
+        bid = create_test_bid()
+        s1 = client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "First"}).json()
+        s2 = client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "Second"}).json()
+        assert s2["sort_order"] > s1["sort_order"]
+
+    def test_holding_distribution_replaces_targets(self):
+        """Setting distribution should replace existing targets, not append."""
+        bid = create_test_bid()
+        h = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Holding"}).json()
+        t1 = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Target 1"}).json()
+        t2 = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Target 2"}).json()
+        t3 = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Target 3"}).json()
+
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/{h['id']}/make-holding", json={
+            "holding_description": "shared equipment",
+        })
+
+        # First distribution: t1, t2
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/{h['id']}/distribute", json={
+            "target_item_ids": [t1["id"], t2["id"]],
+        })
+        dist = client.get(f"/api/bidding/bids/{bid['id']}/sov/{h['id']}/distribution").json()
+        assert len(dist) == 2
+
+        # Replace with t2, t3 — should NOT have t1 anymore
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/{h['id']}/distribute", json={
+            "target_item_ids": [t2["id"], t3["id"]],
+        })
+        dist = client.get(f"/api/bidding/bids/{bid['id']}/sov/{h['id']}/distribution").json()
+        assert len(dist) == 2
+        target_ids = {d["target_item_id"] for d in dist}
+        assert t1["id"] not in target_ids
+        assert t2["id"] in target_ids
+        assert t3["id"] in target_ids

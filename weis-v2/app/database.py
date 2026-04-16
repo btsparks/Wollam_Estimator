@@ -406,6 +406,168 @@ CREATE TABLE IF NOT EXISTS bid_activity (
 
 CREATE INDEX IF NOT EXISTS idx_bid_activity_sov_item ON bid_activity(bid_sov_item_id);
 CREATE INDEX IF NOT EXISTS idx_bid_activity_cost_code ON bid_activity(cost_code);
+
+-- Section headers for organizing SOV items (replaces pricing_group)
+CREATE TABLE IF NOT EXISTS bid_section (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id        INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    sort_order    REAL NOT NULL DEFAULT 0,
+    collapsed     INTEGER NOT NULL DEFAULT 0,
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bid_section_bid ON bid_section(bid_id);
+
+-- Holding account distribution mapping
+CREATE TABLE IF NOT EXISTS holding_distribution (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    holding_item_id     INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+    target_item_id      INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(holding_item_id, target_item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_holding_dist_holding ON holding_distribution(holding_item_id);
+CREATE INDEX IF NOT EXISTS idx_holding_dist_target ON holding_distribution(target_item_id);
+
+-- Drawing register (AI-built from bid documents)
+CREATE TABLE IF NOT EXISTS drawing_register (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id            INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+    document_id       INTEGER REFERENCES bid_documents(id) ON DELETE SET NULL,
+    drawing_number    TEXT NOT NULL,
+    title             TEXT,
+    discipline        TEXT,
+    revision          TEXT DEFAULT '0',
+    sheet_count       INTEGER DEFAULT 1,
+    addendum_number   INTEGER DEFAULT 0,
+    date_received     DATE,
+    previous_revision TEXT,
+    is_new            INTEGER DEFAULT 1,
+    is_revised        INTEGER DEFAULT 0,
+    notes             TEXT,
+    ai_generated      INTEGER DEFAULT 1,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_drawing_reg_bid ON drawing_register(bid_id);
+
+-- Spec register (AI-built from bid documents)
+CREATE TABLE IF NOT EXISTS spec_register (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id            INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+    document_id       INTEGER REFERENCES bid_documents(id) ON DELETE SET NULL,
+    spec_section      TEXT NOT NULL,
+    title             TEXT,
+    division          TEXT,
+    addendum_number   INTEGER DEFAULT 0,
+    date_received     DATE,
+    is_new            INTEGER DEFAULT 1,
+    is_revised        INTEGER DEFAULT 0,
+    revision_summary  TEXT,
+    notes             TEXT,
+    ai_generated      INTEGER DEFAULT 1,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_spec_reg_bid ON spec_register(bid_id);
+
+-- RFI & Clarifications log (AI-built from bid documents)
+CREATE TABLE IF NOT EXISTS rfi_log (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id            INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+    document_id       INTEGER REFERENCES bid_documents(id) ON DELETE SET NULL,
+    rfi_number        TEXT,
+    question          TEXT NOT NULL,
+    asked_by          TEXT,
+    date_asked        DATE,
+    response          TEXT,
+    responded_by      TEXT,
+    date_responded    DATE,
+    addendum_number   INTEGER,
+    related_spec      TEXT,
+    related_drawing   TEXT,
+    status            TEXT DEFAULT 'answered',
+    notes             TEXT,
+    ai_generated      INTEGER DEFAULT 1,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_rfi_log_bid ON rfi_log(bid_id);
+
+-- Vendor directory (global, not per-bid)
+CREATE TABLE IF NOT EXISTS vendor_directory (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    vendor_type     TEXT NOT NULL,
+    trade           TEXT NOT NULL,
+    company         TEXT NOT NULL,
+    contact_name    TEXT,
+    city            TEXT,
+    state           TEXT,
+    phone           TEXT,
+    cell            TEXT,
+    email           TEXT,
+    website         TEXT,
+    fax             TEXT,
+    is_dbe          INTEGER DEFAULT 0,
+    specialties     TEXT,
+    second_contact  TEXT,
+    second_phone    TEXT,
+    second_email    TEXT,
+    notes           TEXT,
+    is_active       INTEGER DEFAULT 1,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_type ON vendor_directory(vendor_type);
+CREATE INDEX IF NOT EXISTS idx_vendor_trade ON vendor_directory(trade);
+CREATE INDEX IF NOT EXISTS idx_vendor_active ON vendor_directory(is_active);
+
+-- Procurement items (per-bid)
+CREATE TABLE IF NOT EXISTS procurement_item (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    bid_id            INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    description       TEXT,
+    procurement_type  TEXT NOT NULL DEFAULT 'subcontract',
+    trade_match       TEXT,
+    status            TEXT NOT NULL DEFAULT 'not_started',
+    priority          TEXT DEFAULT 'normal',
+    ai_suggested      INTEGER DEFAULT 0,
+    ai_source         TEXT,
+    target_send_date  DATE,
+    notes             TEXT,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_procurement_bid ON procurement_item(bid_id);
+
+-- Procurement SOV item linkage
+CREATE TABLE IF NOT EXISTS procurement_sov_link (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    procurement_item_id INTEGER NOT NULL REFERENCES procurement_item(id) ON DELETE CASCADE,
+    sov_item_id         INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+    UNIQUE(procurement_item_id, sov_item_id)
+);
+
+-- Procurement solicitations (per procurement item)
+CREATE TABLE IF NOT EXISTS procurement_solicitation (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    procurement_item_id INTEGER NOT NULL REFERENCES procurement_item(id) ON DELETE CASCADE,
+    vendor_id           INTEGER REFERENCES vendor_directory(id) ON DELETE SET NULL,
+    company_name        TEXT,
+    contact_name        TEXT,
+    contact_email       TEXT,
+    contact_phone       TEXT,
+    date_sent           DATE,
+    date_expected       DATE,
+    date_received       DATE,
+    quote_amount        REAL,
+    status              TEXT NOT NULL DEFAULT 'not_sent',
+    notes               TEXT,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_solicitation_item ON procurement_solicitation(procurement_item_id);
 """
 
 
