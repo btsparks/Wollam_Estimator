@@ -3320,10 +3320,15 @@ async function renderBidSOV(bidId) {
                 <button class="btn btn-sm" style="background:var(--wollam-navy);color:white;" onclick="mapSOVIntelligence(${bidId})" id="mapIntelBtn">${hasStaleIntel ? 'Re-Map Intelligence' : 'Map Intelligence'}</button>
                 <button class="btn btn-sm" onclick="showAddSection(${bidId})">+ Section</button>
                 <div style="flex:1;"></div>
+                <div style="display:flex;gap:4px;align-items:center;">
+                    <button class="btn btn-sm" onclick="setAllOutOfScope(${bidId})" style="font-size:11px;" title="Mark all items out of scope, then add back the ones you want">Exclude All</button>
+                    ${outOfScopeItems.length > 0 ? `<button class="btn btn-sm" onclick="setAllInScope(${bidId})" style="font-size:11px;" title="Bring all items back in scope">Include All</button>` : ''}
+                </div>
                 <div id="sovBulkActions" style="display:none;gap:6px;align-items:center;">
                     <span id="sovSelectCount" style="font-size:12px;color:var(--text-secondary);"></span>
                     <button class="btn btn-sm" onclick="bulkSetWorkType(${bidId}, 'self_perform')" style="font-size:11px;">Set SP</button>
                     <button class="btn btn-sm" onclick="bulkSetWorkType(${bidId}, 'subcontract')" style="font-size:11px;">Set SUB</button>
+                    <button class="btn btn-sm" onclick="bulkSetScope(${bidId}, false)" style="font-size:11px;color:var(--danger-red);">Exclude</button>
                     <button class="btn btn-sm" onclick="clearSOVSelection()" style="font-size:11px;">Clear</button>
                 </div>
             </div>
@@ -3337,7 +3342,7 @@ async function renderBidSOV(bidId) {
 
             ${items.length === 0 ? '<div class="empty-state"><p>No schedule items yet. Upload a bid schedule or add items manually.</p></div>' : `
             <div style="margin-bottom:8px;font-size:12px;color:var(--text-secondary);">
-                <span>${inScopeItems.length} in scope${outOfScopeItems.length > 0 ? `, ${outOfScopeItems.length} out of scope` : ''}</span>
+                <span data-scope-counts>${inScopeItems.length} in scope${outOfScopeItems.length > 0 ? `, ${outOfScopeItems.length} out of scope` : ''}</span>
             </div>
 
             <div class="card" style="padding:0;overflow-x:auto;">
@@ -3388,39 +3393,9 @@ async function renderBidSOV(bidId) {
                 </table>
             </div>
 
-            ${outOfScopeItems.length > 0 ? `
-            <div style="margin-top:24px;">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;" onclick="document.getElementById('outOfScopeTable').style.display = document.getElementById('outOfScopeTable').style.display === 'none' ? 'block' : 'none'; document.getElementById('oos-chevron').textContent = document.getElementById('outOfScopeTable').style.display === 'none' ? '▶' : '▼';">
-                    <span id="oos-chevron" style="color:var(--text-tertiary);font-size:12px;">&#9660;</span>
-                    <h4 style="margin:0;font-size:13px;font-weight:600;color:var(--text-tertiary);">Out of Scope Items</h4>
-                    <span style="font-size:11px;color:var(--text-tertiary);">(${outOfScopeItems.length})</span>
-                </div>
-                <div id="outOfScopeTable" class="card" style="padding:0;overflow-x:auto;opacity:0.7;">
-                    <table style="width:100%;border-collapse:collapse;font-size:13px;">
-                        <thead>
-                            <tr style="background:#F1F5F9;border-bottom:2px solid var(--border-default);">
-                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);width:60px;">#</th>
-                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);">Description</th>
-                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);width:60px;">Unit</th>
-                                <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-tertiary);width:80px;">Qty</th>
-                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-tertiary);width:60px;">Scope</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${outOfScopeItems.map(item => `
-                            <tr style="border-bottom:1px solid var(--border-default);">
-                                <td style="padding:6px 12px;color:var(--text-tertiary);font-family:monospace;font-size:12px;">${escHtml(item.item_number || '—')}</td>
-                                <td style="padding:6px 12px;color:var(--text-tertiary);">${escHtml(item.description)}</td>
-                                <td style="padding:6px 12px;color:var(--text-tertiary);">${escHtml(item.unit || '—')}</td>
-                                <td style="padding:6px 12px;text-align:right;color:var(--text-tertiary);">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
-                                <td style="padding:6px 12px;text-align:center;">
-                                    <input type="checkbox" onchange="toggleItemScope(${item.id}, ${bidId}, true)" style="cursor:pointer;" title="Check to bring back in scope">
-                                </td>
-                            </tr>`).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            </div>` : ''}`}
+            <div id="outOfScopeContainer" style="margin-top:24px;">
+                ${outOfScopeItems.length > 0 ? renderOutOfScopeTable(outOfScopeItems, bidId) : ''}
+            </div>`}
         `;
     } catch (err) {
         tc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
@@ -3470,6 +3445,41 @@ function renderSOVItemRow(item, bidId, intelMap, sectionId) {
         </td>
     </tr>
     <tr class="sov-item-row ${sectionId ? `section-${sectionId}` : 'section-unsectioned'}"><td colspan="9" style="padding:0;"><div id="detail-panel-${item.id}" style="display:none;"></div></td></tr>`;
+}
+
+function renderOutOfScopeTable(outItems, bidId) {
+    if (!outItems || outItems.length === 0) return '';
+    return `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;" onclick="document.getElementById('outOfScopeTable').style.display = document.getElementById('outOfScopeTable').style.display === 'none' ? 'block' : 'none'; document.getElementById('oos-chevron').textContent = document.getElementById('outOfScopeTable').style.display === 'none' ? '▶' : '▼';">
+            <span id="oos-chevron" style="color:var(--text-tertiary);font-size:12px;">&#9660;</span>
+            <h4 style="margin:0;font-size:13px;font-weight:600;color:var(--text-tertiary);">Out of Scope Items</h4>
+            <span style="font-size:11px;color:var(--text-tertiary);">(${outItems.length})</span>
+        </div>
+        <div id="outOfScopeTable" class="card" style="padding:0;overflow-x:auto;opacity:0.7;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                <thead>
+                    <tr style="background:#F1F5F9;border-bottom:2px solid var(--border-default);">
+                        <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);width:60px;">#</th>
+                        <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);">Description</th>
+                        <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);width:60px;">Unit</th>
+                        <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-tertiary);width:80px;">Qty</th>
+                        <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-tertiary);width:60px;">Scope</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${outItems.map(item => `
+                    <tr style="border-bottom:1px solid var(--border-default);" id="sov-row-${item.id}">
+                        <td style="padding:6px 12px;color:var(--text-tertiary);font-family:monospace;font-size:12px;">${escHtml(item.item_number || '—')}</td>
+                        <td style="padding:6px 12px;color:var(--text-tertiary);">${escHtml(item.description)}</td>
+                        <td style="padding:6px 12px;color:var(--text-tertiary);">${escHtml(item.unit || '—')}</td>
+                        <td style="padding:6px 12px;text-align:right;color:var(--text-tertiary);">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
+                        <td style="padding:6px 12px;text-align:center;">
+                            <input type="checkbox" onchange="toggleItemScope(${item.id}, ${bidId}, true)" style="cursor:pointer;" title="Check to bring back in scope">
+                        </td>
+                    </tr>`).join('')}
+                </tbody>
+            </table>
+        </div>`;
 }
 
 function showSOVUpload(bidId) {
@@ -5149,21 +5159,73 @@ async function toggleItemScope(itemId, bidId, inScope) {
             method: 'POST',
             body: JSON.stringify({ item_ids: [itemId], in_scope: inScope ? 1 : 0 }),
         });
-        renderBidSOV(bidId);
+        // Remove the row from current table without full re-render
+        const row = document.getElementById(`sov-row-${itemId}`);
+        if (row) {
+            const detailRow = row.nextElementSibling; // detail panel row
+            row.remove();
+            if (detailRow && detailRow.querySelector(`[id^="detail-panel-"]`)) detailRow.remove();
+        }
+        // Update the counts display
+        const countEl = document.querySelector('#bidTabContent .card + div, #bidTabContent > div:nth-child(5)');
+        // Lazy refresh: just update the scope counts text
+        const allItems = await api(`/bidding/bids/${bidId}/sov`);
+        const inCount = allItems.filter(i => i.in_scope !== 0).length;
+        const outCount = allItems.filter(i => i.in_scope === 0).length;
+        const countSpan = document.querySelector('[data-scope-counts]');
+        if (countSpan) countSpan.textContent = `${inCount} in scope${outCount > 0 ? `, ${outCount} out of scope` : ''}`;
+        // Rebuild just the out-of-scope table
+        const oosContainer = document.getElementById('outOfScopeContainer');
+        if (oosContainer) {
+            const outItems = allItems.filter(i => i.in_scope === 0);
+            oosContainer.innerHTML = outItems.length > 0 ? renderOutOfScopeTable(outItems, bidId) : '';
+        }
+        // If bringing item back in scope, do a full refresh since it needs section placement
+        if (inScope) renderBidSOV(bidId);
     } catch (err) {
         alert('Error: ' + err.message);
-        renderBidSOV(bidId);
     }
 }
 
-async function toggleAllScope(bidId, inScope) {
+async function setAllOutOfScope(bidId) {
+    if (!confirm('Mark ALL items as out of scope? You can add them back individually.')) return;
     try {
         const items = await api(`/bidding/bids/${bidId}/sov`);
-        const ids = items.map(i => i.id);
+        const ids = items.filter(i => i.in_scope !== 0).map(i => i.id);
+        if (ids.length === 0) return;
         await api(`/bidding/bids/${bidId}/sov/set-scope`, {
             method: 'POST',
-            body: JSON.stringify({ item_ids: ids, in_scope: inScope ? 1 : 0 }),
+            body: JSON.stringify({ item_ids: ids, in_scope: 0 }),
         });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function setAllInScope(bidId) {
+    try {
+        const items = await api(`/bidding/bids/${bidId}/sov`);
+        const ids = items.filter(i => i.in_scope === 0).map(i => i.id);
+        if (ids.length === 0) return;
+        await api(`/bidding/bids/${bidId}/sov/set-scope`, {
+            method: 'POST',
+            body: JSON.stringify({ item_ids: ids, in_scope: 1 }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function bulkSetScope(bidId, inScope) {
+    if (!window._sovSelectedIds || window._sovSelectedIds.size === 0) return;
+    try {
+        await api(`/bidding/bids/${bidId}/sov/set-scope`, {
+            method: 'POST',
+            body: JSON.stringify({ item_ids: [...window._sovSelectedIds], in_scope: inScope ? 1 : 0 }),
+        });
+        window._sovSelectedIds = new Set();
         renderBidSOV(bidId);
     } catch (err) {
         alert('Error: ' + err.message);
