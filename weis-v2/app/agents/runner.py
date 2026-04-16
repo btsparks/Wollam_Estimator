@@ -60,8 +60,9 @@ def _load_bid_context(bid_id: int) -> dict:
             raise ValueError(f"Bid {bid_id} not found")
 
         sov_items = conn.execute(
-            """SELECT item_number, description, quantity, unit, notes
-               FROM bid_sov_item WHERE bid_id = ? ORDER BY sort_order""",
+            """SELECT item_number, description, quantity, unit, notes, work_type
+               FROM bid_sov_item WHERE bid_id = ? AND COALESCE(in_scope, 1) = 1
+               ORDER BY sort_order""",
             (bid_id,),
         ).fetchall()
 

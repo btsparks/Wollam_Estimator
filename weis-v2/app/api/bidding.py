@@ -88,6 +88,11 @@ class SOVItemCreate(BaseModel):
     unit: Optional[str] = None
     notes: Optional[str] = None
     pricing_group_id: Optional[int] = None
+    hcss_number: Optional[str] = None
+    work_type: Optional[str] = None
+    section_id: Optional[int] = None
+    is_holding_account: Optional[int] = None
+    holding_description: Optional[str] = None
 
 
 class SOVItemUpdate(BaseModel):
@@ -98,11 +103,21 @@ class SOVItemUpdate(BaseModel):
     notes: Optional[str] = None
     pricing_group_id: Optional[int] = None
     in_scope: Optional[int] = None
+    hcss_number: Optional[str] = None
+    work_type: Optional[str] = None
+    section_id: Optional[int] = None
+    is_holding_account: Optional[int] = None
+    holding_description: Optional[str] = None
 
 
 class SOVScopeUpdate(BaseModel):
     item_ids: list[int]
     in_scope: int  # 1 or 0
+
+
+class SOVWorkTypeUpdate(BaseModel):
+    item_ids: list[int]
+    work_type: str  # 'self_perform', 'subcontract', or 'undecided'
 
 
 class SOVConfirm(BaseModel):
@@ -125,6 +140,29 @@ class GroupUpdate(BaseModel):
 
 class AssignItems(BaseModel):
     item_ids: list[int]
+
+
+class SectionCreate(BaseModel):
+    name: str
+    sort_order: Optional[float] = None
+
+
+class SectionUpdate(BaseModel):
+    name: Optional[str] = None
+    sort_order: Optional[float] = None
+    collapsed: Optional[int] = None
+
+
+class SectionAssign(BaseModel):
+    item_ids: list[int]
+
+
+class HoldingAccountCreate(BaseModel):
+    holding_description: Optional[str] = None
+
+
+class HoldingDistribute(BaseModel):
+    target_item_ids: list[int]
 
 
 # ── Bid CRUD ─────────────────────────────────────────────────────
@@ -292,7 +330,9 @@ async def delete_bid(bid_id: int):
         # Delete children first (foreign key order)
         conn.execute("DELETE FROM bid_document_chunks WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM bid_documents WHERE bid_id = ?", (bid_id,))
+        conn.execute("DELETE FROM holding_distribution WHERE holding_item_id IN (SELECT id FROM bid_sov_item WHERE bid_id = ?)", (bid_id,))
         conn.execute("DELETE FROM bid_sov_item WHERE bid_id = ?", (bid_id,))
+        conn.execute("DELETE FROM bid_section WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM pricing_group WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM active_bids WHERE id = ?", (bid_id,))
         conn.commit()
@@ -972,13 +1012,16 @@ async def confirm_sov(bid_id: int, body: SOVConfirm):
 
 @router.get("/bids/{bid_id}/sov")
 async def list_sov(bid_id: int):
-    """Get all SOV items for a bid."""
+    """Get all SOV items for a bid, grouped by section."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT s.*, pg.name as group_name
+            """SELECT s.*, pg.name as group_name,
+                      bs.name as section_name, bs.sort_order as section_sort_order,
+                      bs.collapsed as section_collapsed
                FROM bid_sov_item s
                LEFT JOIN pricing_group pg ON s.pricing_group_id = pg.id
+               LEFT JOIN bid_section bs ON s.section_id = bs.id
                WHERE s.bid_id = ?
                ORDER BY s.sort_order ASC""",
             (bid_id,),
@@ -1005,11 +1048,14 @@ async def add_sov_item(bid_id: int, item: SOVItemCreate):
         cursor = conn.execute(
             """INSERT INTO bid_sov_item
                (bid_id, item_number, description, quantity, unit, notes,
-                pricing_group_id, sort_order)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                pricing_group_id, hcss_number, work_type, section_id,
+                is_holding_account, holding_description, sort_order)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 bid_id, item.item_number, item.description, item.quantity,
-                item.unit, item.notes, item.pricing_group_id, max_sort + 1,
+                item.unit, item.notes, item.pricing_group_id,
+                item.hcss_number, item.work_type or 'undecided', item.section_id,
+                item.is_holding_account or 0, item.holding_description, max_sort + 1,
             ),
         )
         conn.commit()
@@ -1054,6 +1100,25 @@ async def set_sov_scope(bid_id: int, body: SOVScopeUpdate):
         conn.close()
 
 
+@router.post("/bids/{bid_id}/sov/set-work-type")
+async def set_sov_work_type(bid_id: int, body: SOVWorkTypeUpdate):
+    """Set work_type for multiple SOV items at once."""
+    valid_types = ("self_perform", "subcontract", "undecided")
+    if body.work_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"work_type must be one of {valid_types}")
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" for _ in body.item_ids)
+        conn.execute(
+            f"UPDATE bid_sov_item SET work_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+            [body.work_type] + body.item_ids,
+        )
+        conn.commit()
+        return {"updated": len(body.item_ids), "work_type": body.work_type}
+    finally:
+        conn.close()
+
+
 @router.put("/sov/{item_id}")
 async def update_sov_item(item_id: int, item: SOVItemUpdate):
     """Update a SOV item."""
@@ -1070,6 +1135,15 @@ async def update_sov_item(item_id: int, item: SOVItemUpdate):
         # Allow setting pricing_group_id to None (ungroup)
         if "pricing_group_id" not in updates and item.pricing_group_id is None and "pricing_group_id" in item.model_fields_set:
             updates["pricing_group_id"] = None
+        # Allow setting section_id to None (unsection)
+        if "section_id" not in updates and item.section_id is None and "section_id" in item.model_fields_set:
+            updates["section_id"] = None
+        # Allow setting hcss_number to None
+        if "hcss_number" not in updates and item.hcss_number is None and "hcss_number" in item.model_fields_set:
+            updates["hcss_number"] = None
+        # Allow setting holding_description to None
+        if "holding_description" not in updates and item.holding_description is None and "holding_description" in item.model_fields_set:
+            updates["holding_description"] = None
 
         if not updates:
             return dict(existing)
@@ -1225,6 +1299,245 @@ async def unassign_items(group_id: int, body: AssignItems):
             )
         conn.commit()
         return {"unassigned": len(body.item_ids), "group_id": group_id}
+    finally:
+        conn.close()
+
+
+# ── Sections (replacing pricing groups) ────────────────────────
+
+
+@router.post("/bids/{bid_id}/sections")
+async def create_section(bid_id: int, body: SectionCreate):
+    """Create a new section for organizing SOV items."""
+    conn = get_connection()
+    try:
+        bid = conn.execute("SELECT id FROM active_bids WHERE id = ?", (bid_id,)).fetchone()
+        if not bid:
+            raise HTTPException(status_code=404, detail="Bid not found")
+
+        sort_order = body.sort_order
+        if sort_order is None:
+            max_sort = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) as m FROM bid_section WHERE bid_id = ?",
+                (bid_id,),
+            ).fetchone()["m"]
+            sort_order = max_sort + 1
+
+        cursor = conn.execute(
+            "INSERT INTO bid_section (bid_id, name, sort_order) VALUES (?, ?, ?)",
+            (bid_id, body.name, sort_order),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM bid_section WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.get("/bids/{bid_id}/sections")
+async def list_sections(bid_id: int):
+    """List all sections for a bid with item counts."""
+    conn = get_connection()
+    try:
+        sections = conn.execute(
+            "SELECT * FROM bid_section WHERE bid_id = ? ORDER BY sort_order ASC",
+            (bid_id,),
+        ).fetchall()
+
+        result = []
+        for s in sections:
+            d = dict(s)
+            d["item_count"] = conn.execute(
+                "SELECT COUNT(*) as cnt FROM bid_sov_item WHERE section_id = ?",
+                (s["id"],),
+            ).fetchone()["cnt"]
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+@router.put("/sections/{section_id}")
+async def update_section(section_id: int, body: SectionUpdate):
+    """Update a section's name, sort_order, or collapsed state."""
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT * FROM bid_section WHERE id = ?", (section_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Section not found")
+
+        updates = {}
+        for k, v in body.model_dump().items():
+            if v is not None:
+                updates[k] = v
+        if not updates:
+            return dict(existing)
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [section_id]
+        conn.execute(f"UPDATE bid_section SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+
+        row = conn.execute("SELECT * FROM bid_section WHERE id = ?", (section_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.delete("/sections/{section_id}")
+async def delete_section(section_id: int):
+    """Delete a section, nullifying item section_id refs."""
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT * FROM bid_section WHERE id = ?", (section_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Section not found")
+
+        conn.execute(
+            "UPDATE bid_sov_item SET section_id = NULL WHERE section_id = ?",
+            (section_id,),
+        )
+        conn.execute("DELETE FROM bid_section WHERE id = ?", (section_id,))
+        conn.commit()
+        return {"deleted": True, "section_id": section_id}
+    finally:
+        conn.close()
+
+
+@router.post("/sections/{section_id}/assign")
+async def assign_items_to_section(section_id: int, body: SectionAssign):
+    """Assign SOV items to a section."""
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT * FROM bid_section WHERE id = ?", (section_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Section not found")
+
+        for item_id in body.item_ids:
+            conn.execute(
+                "UPDATE bid_sov_item SET section_id = ? WHERE id = ?",
+                (section_id, item_id),
+            )
+        conn.commit()
+        return {"assigned": len(body.item_ids), "section_id": section_id}
+    finally:
+        conn.close()
+
+
+# ── Holding Accounts ──────────────────────────────────────────
+
+
+@router.post("/bids/{bid_id}/sov/{item_id}/make-holding")
+async def make_holding_account(bid_id: int, item_id: int, body: HoldingAccountCreate):
+    """Mark an SOV item as a holding account."""
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT * FROM bid_sov_item WHERE id = ? AND bid_id = ?", (item_id, bid_id)
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="SOV item not found")
+
+        conn.execute(
+            "UPDATE bid_sov_item SET is_holding_account = 1, holding_description = ? WHERE id = ?",
+            (body.holding_description, item_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM bid_sov_item WHERE id = ?", (item_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.delete("/bids/{bid_id}/sov/{item_id}/make-holding")
+async def unmake_holding_account(bid_id: int, item_id: int):
+    """Convert a holding account back to a regular item."""
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT * FROM bid_sov_item WHERE id = ? AND bid_id = ?", (item_id, bid_id)
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="SOV item not found")
+
+        conn.execute(
+            "UPDATE bid_sov_item SET is_holding_account = 0, holding_description = NULL WHERE id = ?",
+            (item_id,),
+        )
+        # Remove any distribution mappings
+        conn.execute("DELETE FROM holding_distribution WHERE holding_item_id = ?", (item_id,))
+        conn.commit()
+        row = conn.execute("SELECT * FROM bid_sov_item WHERE id = ?", (item_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@router.post("/bids/{bid_id}/sov/{item_id}/distribute")
+async def set_holding_distribution(bid_id: int, item_id: int, body: HoldingDistribute):
+    """Set distribution targets for a holding account."""
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT * FROM bid_sov_item WHERE id = ? AND bid_id = ? AND is_holding_account = 1",
+            (item_id, bid_id),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Holding account not found")
+
+        # Replace all distributions
+        conn.execute("DELETE FROM holding_distribution WHERE holding_item_id = ?", (item_id,))
+        for target_id in body.target_item_ids:
+            conn.execute(
+                "INSERT INTO holding_distribution (holding_item_id, target_item_id) VALUES (?, ?)",
+                (item_id, target_id),
+            )
+        conn.commit()
+        return {"holding_item_id": item_id, "target_count": len(body.target_item_ids)}
+    finally:
+        conn.close()
+
+
+@router.get("/bids/{bid_id}/sov/{item_id}/distribution")
+async def get_holding_distribution(bid_id: int, item_id: int):
+    """Get current distribution targets for a holding account."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT hd.target_item_id, s.item_number, s.description
+               FROM holding_distribution hd
+               JOIN bid_sov_item s ON hd.target_item_id = s.id
+               WHERE hd.holding_item_id = ?""",
+            (item_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.get("/bids/{bid_id}/holding-accounts")
+async def list_holding_accounts(bid_id: int):
+    """List all holding accounts with their distributions."""
+    conn = get_connection()
+    try:
+        holdings = conn.execute(
+            "SELECT * FROM bid_sov_item WHERE bid_id = ? AND is_holding_account = 1 ORDER BY sort_order",
+            (bid_id,),
+        ).fetchall()
+
+        result = []
+        for h in holdings:
+            d = dict(h)
+            targets = conn.execute(
+                """SELECT hd.target_item_id, s.item_number, s.description
+                   FROM holding_distribution hd
+                   JOIN bid_sov_item s ON hd.target_item_id = s.id
+                   WHERE hd.holding_item_id = ?""",
+                (h["id"],),
+            ).fetchall()
+            d["distribution_targets"] = [dict(t) for t in targets]
+            result.append(d)
+        return result
     finally:
         conn.close()
 

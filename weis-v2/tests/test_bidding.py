@@ -29,7 +29,10 @@ def cleanup_test_bids():
             for bid_id in _test_bid_ids:
                 conn.execute("DELETE FROM bid_document_chunks WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM bid_documents WHERE bid_id = ?", (bid_id,))
+                conn.execute("DELETE FROM holding_distribution WHERE holding_item_id IN (SELECT id FROM bid_sov_item WHERE bid_id = ?)", (bid_id,))
+                conn.execute("DELETE FROM sov_item_intelligence WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM bid_sov_item WHERE bid_id = ?", (bid_id,))
+                conn.execute("DELETE FROM bid_section WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM pricing_group WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM active_bids WHERE id = ?", (bid_id,))
             conn.commit()
@@ -482,3 +485,249 @@ class TestPricingGroups:
         items = client.get(f"/api/bidding/bids/{bid['id']}/sov").json()
         target = next(i for i in items if i["id"] == item["id"])
         assert target["pricing_group_id"] is None
+
+
+# ── Section CRUD ────────────────────────────────────────────────
+
+class TestSections:
+
+    def test_create_section(self):
+        bid = create_test_bid()
+        res = client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "Division 3 — Concrete"})
+        assert res.status_code == 200
+        section = res.json()
+        assert section["name"] == "Division 3 — Concrete"
+        assert section["bid_id"] == bid["id"]
+        assert section["collapsed"] == 0
+
+    def test_list_sections_with_item_count(self):
+        bid = create_test_bid()
+        sec = client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "Section A"}).json()
+        client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Item 1", "section_id": sec["id"]})
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/sections")
+        assert res.status_code == 200
+        sections = res.json()
+        assert len(sections) == 1
+        assert sections[0]["item_count"] == 1
+
+    def test_update_section(self):
+        bid = create_test_bid()
+        sec = client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "Old Name"}).json()
+
+        res = client.put(f"/api/bidding/sections/{sec['id']}", json={"name": "New Name"})
+        assert res.status_code == 200
+        assert res.json()["name"] == "New Name"
+
+    def test_delete_section_nullifies_items(self):
+        bid = create_test_bid()
+        sec = client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "To Delete"}).json()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Item 1", "section_id": sec["id"]}).json()
+
+        res = client.delete(f"/api/bidding/sections/{sec['id']}")
+        assert res.status_code == 200
+
+        items = client.get(f"/api/bidding/bids/{bid['id']}/sov").json()
+        target = next(i for i in items if i["id"] == item["id"])
+        assert target["section_id"] is None
+
+    def test_assign_items_to_section(self):
+        bid = create_test_bid()
+        sec = client.post(f"/api/bidding/bids/{bid['id']}/sections", json={"name": "Section A"}).json()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Item 1"}).json()
+
+        res = client.post(f"/api/bidding/sections/{sec['id']}/assign", json={"item_ids": [item["id"]]})
+        assert res.status_code == 200
+        assert res.json()["assigned"] == 1
+
+        items = client.get(f"/api/bidding/bids/{bid['id']}/sov").json()
+        target = next(i for i in items if i["id"] == item["id"])
+        assert target["section_id"] == sec["id"]
+        assert target["section_name"] == "Section A"
+
+
+# ── HCSS Number ─────────────────────────────────────────────────
+
+class TestHCSSNumber:
+
+    def test_create_sov_item_with_hcss_number(self):
+        bid = create_test_bid()
+        res = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={
+            "description": "Concrete Work",
+            "hcss_number": "3.01.001",
+        })
+        assert res.status_code == 200
+        item = res.json()
+        assert item["hcss_number"] == "3.01.001"
+
+    def test_update_hcss_number(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Test"}).json()
+
+        res = client.put(f"/api/bidding/sov/{item['id']}", json={"hcss_number": "5.01.002"})
+        assert res.status_code == 200
+        assert res.json()["hcss_number"] == "5.01.002"
+
+    def test_clear_hcss_number(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={
+            "description": "Test", "hcss_number": "3.01",
+        }).json()
+
+        res = client.put(f"/api/bidding/sov/{item['id']}", json={"hcss_number": None})
+        assert res.status_code == 200
+        assert res.json()["hcss_number"] is None
+
+    def test_hcss_number_in_sov_list(self):
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/sov", json={
+            "description": "Item A", "hcss_number": "1.01",
+        })
+        items = client.get(f"/api/bidding/bids/{bid['id']}/sov").json()
+        assert items[0]["hcss_number"] == "1.01"
+
+
+# ── Work Type Bulk Assignment ────────────────────────────────────
+
+class TestWorkType:
+
+    def test_set_work_type_single(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Test"}).json()
+        assert item["work_type"] == "undecided"
+
+        res = client.put(f"/api/bidding/sov/{item['id']}", json={"work_type": "self_perform"})
+        assert res.status_code == 200
+        assert res.json()["work_type"] == "self_perform"
+
+    def test_bulk_set_work_type(self):
+        bid = create_test_bid()
+        item1 = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "A"}).json()
+        item2 = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "B"}).json()
+
+        res = client.post(f"/api/bidding/bids/{bid['id']}/sov/set-work-type", json={
+            "item_ids": [item1["id"], item2["id"]],
+            "work_type": "subcontract",
+        })
+        assert res.status_code == 200
+        assert res.json()["updated"] == 2
+
+        items = client.get(f"/api/bidding/bids/{bid['id']}/sov").json()
+        for item in items:
+            assert item["work_type"] == "subcontract"
+
+    def test_bulk_set_work_type_invalid(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "A"}).json()
+
+        res = client.post(f"/api/bidding/bids/{bid['id']}/sov/set-work-type", json={
+            "item_ids": [item["id"]],
+            "work_type": "invalid_type",
+        })
+        assert res.status_code == 400
+
+
+# ── Holding Account Distribution ─────────────────────────────────
+
+class TestHoldingAccounts:
+
+    def test_make_holding_account(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Equipment"}).json()
+
+        res = client.post(f"/api/bidding/bids/{bid['id']}/sov/{item['id']}/make-holding", json={
+            "holding_description": "crane, man lifts, forklift",
+        })
+        assert res.status_code == 200
+        result = res.json()
+        assert result["is_holding_account"] == 1
+        assert result["holding_description"] == "crane, man lifts, forklift"
+
+    def test_unmake_holding_account(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Equipment"}).json()
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/{item['id']}/make-holding", json={
+            "holding_description": "crane",
+        })
+
+        res = client.delete(f"/api/bidding/bids/{bid['id']}/sov/{item['id']}/make-holding")
+        assert res.status_code == 200
+        result = res.json()
+        assert result["is_holding_account"] == 0
+        assert result["holding_description"] is None
+
+    def test_set_distribution_targets(self):
+        bid = create_test_bid()
+        holding = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Equipment"}).json()
+        target1 = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Concrete Work"}).json()
+        target2 = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Steel Work"}).json()
+
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/{holding['id']}/make-holding", json={
+            "holding_description": "shared equipment",
+        })
+
+        res = client.post(f"/api/bidding/bids/{bid['id']}/sov/{holding['id']}/distribute", json={
+            "target_item_ids": [target1["id"], target2["id"]],
+        })
+        assert res.status_code == 200
+        assert res.json()["target_count"] == 2
+
+        dist = client.get(f"/api/bidding/bids/{bid['id']}/sov/{holding['id']}/distribution").json()
+        assert len(dist) == 2
+        target_ids = {d["target_item_id"] for d in dist}
+        assert target1["id"] in target_ids
+        assert target2["id"] in target_ids
+
+    def test_list_holding_accounts(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Equipment"}).json()
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/{item['id']}/make-holding", json={
+            "holding_description": "test",
+        })
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/holding-accounts")
+        assert res.status_code == 200
+        holdings = res.json()
+        assert len(holdings) == 1
+        assert holdings[0]["is_holding_account"] == 1
+
+    def test_distribute_non_holding_fails(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Regular"}).json()
+
+        res = client.post(f"/api/bidding/bids/{bid['id']}/sov/{item['id']}/distribute", json={
+            "target_item_ids": [],
+        })
+        assert res.status_code == 404
+
+
+# ── Out-of-Scope Agent Runner Filtering ──────────────────────────
+
+class TestOutOfScopeFiltering:
+
+    def test_agent_runner_loads_only_in_scope(self):
+        """Verify _load_bid_context filters out-of-scope items."""
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "In Scope Item"})
+        out_scope = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Out Scope Item"}).json()
+
+        # Mark one item out of scope
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/set-scope", json={
+            "item_ids": [out_scope["id"]], "in_scope": 0,
+        })
+
+        from app.agents.runner import _load_bid_context
+        context = _load_bid_context(bid["id"])
+        descriptions = [i["description"] for i in context["sov_items"]]
+        assert "In Scope Item" in descriptions
+        assert "Out Scope Item" not in descriptions
+
+    def test_agent_context_includes_work_type(self):
+        """Verify _load_bid_context includes work_type field."""
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Test Item"}).json()
+        client.put(f"/api/bidding/sov/{item['id']}", json={"work_type": "self_perform"})
+
+        from app.agents.runner import _load_bid_context
+        context = _load_bid_context(bid["id"])
+        assert context["sov_items"][0]["work_type"] == "self_perform"

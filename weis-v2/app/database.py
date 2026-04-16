@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.15"
+SCHEMA_VERSION = "2.16"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -1493,6 +1493,80 @@ def _migrate_2_14_to_2_15(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.15'")
 
 
+def _migrate_2_15_to_2_16(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.15 to 2.16: SOV UX Overhaul Part A.
+
+    Changes:
+    1. Add hcss_number, work_type, section_id, is_holding_account, holding_description to bid_sov_item
+    2. Create bid_section table (replaces pricing_group)
+    3. Create holding_distribution table
+    4. Migrate existing pricing_group data to bid_section
+    """
+    # 1. New columns on bid_sov_item
+    for stmt in [
+        "ALTER TABLE bid_sov_item ADD COLUMN hcss_number TEXT",
+        "ALTER TABLE bid_sov_item ADD COLUMN work_type TEXT DEFAULT 'undecided'",
+        "ALTER TABLE bid_sov_item ADD COLUMN section_id INTEGER REFERENCES bid_section(id) ON DELETE SET NULL",
+        "ALTER TABLE bid_sov_item ADD COLUMN is_holding_account INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE bid_sov_item ADD COLUMN holding_description TEXT",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # 2. Create bid_section table
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS bid_section (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id        INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        sort_order    REAL NOT NULL DEFAULT 0,
+        collapsed     INTEGER NOT NULL DEFAULT 0,
+        created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_bid_section_bid ON bid_section(bid_id);
+    """)
+
+    # 3. Create holding_distribution table
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS holding_distribution (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        holding_item_id     INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+        target_item_id      INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(holding_item_id, target_item_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_holding_dist_holding ON holding_distribution(holding_item_id);
+    CREATE INDEX IF NOT EXISTS idx_holding_dist_target ON holding_distribution(target_item_id);
+    """)
+
+    # 4. Migrate pricing_group data to bid_section
+    try:
+        existing_groups = conn.execute(
+            "SELECT id, bid_id, name FROM pricing_group ORDER BY id"
+        ).fetchall()
+
+        group_to_section = {}
+        for g in existing_groups:
+            cursor = conn.execute(
+                "INSERT INTO bid_section (bid_id, name, sort_order) VALUES (?, ?, ?)",
+                (g["bid_id"], g["name"], g["id"]),
+            )
+            group_to_section[g["id"]] = cursor.lastrowid
+
+        # Update bid_sov_item to point at new sections
+        for old_group_id, new_section_id in group_to_section.items():
+            conn.execute(
+                "UPDATE bid_sov_item SET section_id = ? WHERE pricing_group_id = ?",
+                (new_section_id, old_group_id),
+            )
+    except sqlite3.OperationalError:
+        pass  # pricing_group table might not exist
+
+    conn.execute("UPDATE schema_version SET version = '2.16'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1585,6 +1659,9 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.14"
             if current == "2.14":
                 _migrate_2_14_to_2_15(conn)
+                current = "2.15"
+            if current == "2.15":
+                _migrate_2_15_to_2_16(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

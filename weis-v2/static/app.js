@@ -2517,6 +2517,10 @@ const GROUP_COLORS = [
     '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1',
 ];
 
+const WORK_TYPE_LABELS = { self_perform: 'SP', subcontract: 'SUB', undecided: '—' };
+const WORK_TYPE_COLORS = { self_perform: 'var(--wollam-navy)', subcontract: '#8B5CF6', undecided: 'var(--text-tertiary)' };
+const WORK_TYPE_BORDER = { self_perform: '3px solid var(--wollam-navy)', subcontract: '3px solid #8B5CF6' };
+
 function bidStatusBadge(status) {
     const map = {
         active: '<span class="badge badge-active">Active</span>',
@@ -3221,29 +3225,54 @@ async function renderBidSOV(bidId) {
     tc.innerHTML = '<div class="empty-state"><p>Loading schedule...</p></div>';
 
     try {
-        const [items, groups, intelSummary] = await Promise.all([
+        const [items, sections, intelSummary] = await Promise.all([
             api(`/bidding/bids/${bidId}/sov`),
-            api(`/bidding/bids/${bidId}/groups`),
+            api(`/bidding/bids/${bidId}/sections`),
             api(`/bidding/bids/${bidId}/sov/intelligence-summary`).catch(() => []),
         ]);
 
         // Build lookup maps
-        const groupColors = {};
-        groups.forEach((g, i) => { groupColors[g.id] = GROUP_COLORS[i % GROUP_COLORS.length]; });
         const intelMap = {};
         intelSummary.forEach(s => { intelMap[s.sov_item_id] = s; });
-
         const hasIntel = intelSummary.length > 0;
         const hasStaleIntel = intelSummary.some(s => s.is_stale);
 
+        // Split items: in-scope vs out-of-scope
+        const inScopeItems = items.filter(i => i.in_scope !== 0);
+        const outOfScopeItems = items.filter(i => i.in_scope === 0);
+
+        // Group in-scope items by section
+        const sectionMap = {};
+        sections.forEach(s => { sectionMap[s.id] = { ...s, items: [] }; });
+        const unsectioned = [];
+        inScopeItems.forEach(item => {
+            if (item.section_id && sectionMap[item.section_id]) {
+                sectionMap[item.section_id].items.push(item);
+            } else {
+                unsectioned.push(item);
+            }
+        });
+        const orderedSections = sections.sort((a, b) => a.sort_order - b.sort_order);
+
+        // Track multi-select state
+        window._sovSelectedIds = window._sovSelectedIds || new Set();
+
+        const sovTableCols = 7; // #, HCSS#, Description, Type, Unit, Qty, Intel, Actions
+
         tc.innerHTML = `
-            <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+            <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
                 <button class="btn btn-primary btn-sm" onclick="showSOVUpload(${bidId})">Upload Schedule</button>
                 <button class="btn btn-sm" onclick="showAddSOVItem(${bidId})">+ Add Item</button>
                 <button class="btn btn-sm" onclick="autoRateAll(${bidId})">Auto-Rate All</button>
                 <button class="btn btn-sm" style="background:var(--wollam-navy);color:white;" onclick="mapSOVIntelligence(${bidId})" id="mapIntelBtn">${hasStaleIntel ? 'Re-Map Intelligence' : 'Map Intelligence'}</button>
+                <button class="btn btn-sm" onclick="showAddSection(${bidId})">+ Section</button>
                 <div style="flex:1;"></div>
-                <button class="btn btn-sm" onclick="showGroupManager(${bidId})">Pricing Groups (${groups.length})</button>
+                <div id="sovBulkActions" style="display:none;gap:6px;align-items:center;">
+                    <span id="sovSelectCount" style="font-size:12px;color:var(--text-secondary);"></span>
+                    <button class="btn btn-sm" onclick="bulkSetWorkType(${bidId}, 'self_perform')" style="font-size:11px;">Set SP</button>
+                    <button class="btn btn-sm" onclick="bulkSetWorkType(${bidId}, 'subcontract')" style="font-size:11px;">Set SUB</button>
+                    <button class="btn btn-sm" onclick="clearSOVSelection()" style="font-size:11px;">Clear</button>
+                </div>
             </div>
 
             ${hasStaleIntel ? `<div style="padding:8px 12px;margin-bottom:12px;background:#FFFBEB;border-left:3px solid #F59E0B;border-radius:var(--radius-sm);font-size:12px;color:#92400E;">&#9888; Intelligence mappings may be outdated — documents or agents have changed since last mapping.</div>` : ''}
@@ -3251,77 +3280,141 @@ async function renderBidSOV(bidId) {
             ${state.biddingSovPreview ? renderSOVPreview(bidId) : ''}
 
             <div id="sovAddForm" style="display:none;"></div>
-            <div id="groupManager" style="display:none;"></div>
+            <div id="sectionAddForm" style="display:none;"></div>
 
             ${items.length === 0 ? '<div class="empty-state"><p>No schedule items yet. Upload a bid schedule or add items manually.</p></div>' : `
             <div style="margin-bottom:8px;font-size:12px;color:var(--text-secondary);">
-                ${items.filter(i => i.in_scope === 0).length > 0
-                    ? `<span>${items.filter(i => i.in_scope !== 0).length} in scope, ${items.filter(i => i.in_scope === 0).length} out of scope</span>`
-                    : `<span>${items.length} items (all in scope)</span>`
-                }
+                <span>${inScopeItems.length} in scope${outOfScopeItems.length > 0 ? `, ${outOfScopeItems.length} out of scope` : ''}</span>
             </div>
+
             <div class="card" style="padding:0;overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;" id="sovMainTable">
                     <thead>
                         <tr style="background:var(--bg-hover);border-bottom:2px solid var(--border-default);">
-                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:60px;">#</th>
-                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);">Description</th>
-                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:70px;">Unit</th>
-                            <th style="padding:10px 12px;text-align:right;font-weight:600;color:var(--text-secondary);width:90px;">Qty</th>
-                            <th style="padding:10px 12px;text-align:right;font-weight:600;color:var(--text-secondary);width:100px;">Rate/Unit</th>
-                            <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);width:80px;">Intel</th>
-                            <th style="padding:10px 12px;text-align:left;font-weight:600;color:var(--text-secondary);width:120px;">Group</th>
-                            <th style="padding:10px 12px;text-align:center;font-weight:600;color:var(--text-secondary);width:100px;">
-                                Actions
-                                <input type="checkbox" ${items.every(i => i.in_scope !== 0) ? 'checked' : ''} onchange="toggleAllScope(${bidId}, this.checked)" title="Toggle all in scope" style="cursor:pointer;margin-left:4px;vertical-align:middle;">
+                            <th style="padding:10px 8px;text-align:center;width:30px;">
+                                <input type="checkbox" onchange="toggleAllSOVSelect(this.checked, ${bidId})" style="cursor:pointer;" title="Select all">
                             </th>
+                            <th style="padding:10px 8px;text-align:left;font-weight:600;color:var(--text-secondary);width:55px;">#</th>
+                            <th style="padding:10px 8px;text-align:left;font-weight:600;color:var(--text-secondary);width:65px;">HCSS #</th>
+                            <th style="padding:10px 8px;text-align:left;font-weight:600;color:var(--text-secondary);">Description</th>
+                            <th style="padding:10px 8px;text-align:center;font-weight:600;color:var(--text-secondary);width:50px;">Type</th>
+                            <th style="padding:10px 8px;text-align:left;font-weight:600;color:var(--text-secondary);width:60px;">Unit</th>
+                            <th style="padding:10px 8px;text-align:right;font-weight:600;color:var(--text-secondary);width:80px;">Qty</th>
+                            <th style="padding:10px 8px;text-align:center;font-weight:600;color:var(--text-secondary);width:60px;">Intel</th>
+                            <th style="padding:10px 8px;text-align:center;font-weight:600;color:var(--text-secondary);width:90px;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${items.map(item => {
-                            const gc = item.pricing_group_id ? groupColors[item.pricing_group_id] : null;
-                            const intel = intelMap[item.id];
-                            const intelBadge = intel ? sovIntelBadge(intel) : '<span style="color:var(--text-tertiary);font-size:11px;">—</span>';
-                            const outOfScope = item.in_scope === 0;
-                            const rowOpacity = outOfScope ? 'opacity:0.45;' : '';
-                            return `
-                            <tr style="${gc ? `border-left:3px solid ${gc};` : ''}border-bottom:1px solid var(--border-default);cursor:pointer;${rowOpacity}" id="sov-row-${item.id}" onclick="toggleSOVIntelligence(${item.id}, ${bidId})">
-                                <td style="padding:8px 12px;color:var(--text-secondary);font-family:monospace;">${escHtml(item.item_number || '—')}</td>
-                                <td style="padding:8px 12px;">${escHtml(item.description)}${outOfScope ? ' <span style="font-size:10px;color:var(--text-tertiary);font-style:italic;">(out of scope)</span>' : ''}</td>
-                                <td style="padding:8px 12px;color:var(--text-secondary);">${escHtml(item.unit || '—')}</td>
-                                <td style="padding:8px 12px;text-align:right;">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
-                                <td style="padding:8px 12px;text-align:right;">
-                                    ${item.unit_price != null
-                                        ? `<span style="font-weight:500;">$${fmtRate(item.unit_price)}</span>
-                                           ${item.rate_confidence ? `<br><span style="font-size:10px;color:${item.rate_confidence === 'high' ? 'var(--success-green)' : item.rate_confidence === 'medium' ? '#F59E0B' : 'var(--text-tertiary)'};">${item.rate_confidence.toUpperCase()}</span>` : ''}`
-                                        : outOfScope ? '<span style="color:var(--text-tertiary);font-size:11px;">—</span>'
-                                        : `<button onclick="event.stopPropagation();lookupSOVRate(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--wollam-navy);font-size:11px;text-decoration:underline;">Lookup</button>`
-                                    }
-                                </td>
-                                <td style="padding:8px 12px;text-align:center;">${outOfScope ? '<span style="color:var(--text-tertiary);font-size:11px;">—</span>' : intelBadge}</td>
-                                <td style="padding:8px 12px;">
-                                    ${item.group_name ? `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${gc};display:inline-block;"></span>${escHtml(item.group_name)}</span>` : '<span style="color:var(--text-tertiary);">—</span>'}
-                                </td>
-                                <td style="padding:8px 12px;text-align:center;" onclick="event.stopPropagation();">
-                                    <button onclick="editSOVItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);padding:2px;" title="Edit">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                                    </button>
-                                    <button onclick="deleteSOVItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);padding:2px;" title="Delete">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                    </button>
-                                    <input type="checkbox" ${!outOfScope ? 'checked' : ''} onchange="toggleItemScope(${item.id}, ${bidId}, this.checked)" style="cursor:pointer;margin-left:4px;vertical-align:middle;" title="${outOfScope ? 'Out of scope — check to include' : 'In scope — uncheck to exclude'}">
+                        ${unsectioned.length > 0 && orderedSections.length > 0 ? `
+                            <tr class="sov-section-header" style="background:var(--bg-hover);cursor:pointer;" onclick="toggleSectionCollapse('unsectioned')">
+                                <td colspan="9" style="padding:8px 12px;font-weight:600;font-size:13px;color:var(--text-primary);border-bottom:2px solid var(--border-strong);">
+                                    <span id="section-chevron-unsectioned" style="display:inline-block;transition:transform 0.2s;margin-right:6px;">&#9660;</span>
+                                    Unassigned
+                                    <span style="font-weight:400;color:var(--text-tertiary);font-size:11px;margin-left:8px;">${unsectioned.length} items</span>
                                 </td>
                             </tr>
-                            <tr><td colspan="8" style="padding:0;"><div id="rate-panel-${item.id}" style="display:none;"></div></td></tr>
-                            <tr><td colspan="8" style="padding:0;"><div id="intel-panel-${item.id}" style="display:none;"></div></td></tr>`;
+                            ${unsectioned.map(item => renderSOVItemRow(item, bidId, intelMap)).join('')}
+                        ` : unsectioned.length > 0 ? unsectioned.map(item => renderSOVItemRow(item, bidId, intelMap)).join('') : ''}
+                        ${orderedSections.map(sec => {
+                            const secItems = sectionMap[sec.id] ? sectionMap[sec.id].items : [];
+                            return `
+                            <tr class="sov-section-header" style="background:var(--bg-hover);cursor:pointer;" onclick="toggleSectionCollapse(${sec.id})">
+                                <td colspan="9" style="padding:8px 12px;font-weight:600;font-size:13px;color:var(--text-primary);border-bottom:2px solid var(--border-strong);">
+                                    <span id="section-chevron-${sec.id}" style="display:inline-block;transition:transform 0.2s;margin-right:6px;">&#9660;</span>
+                                    ${escHtml(sec.name)}
+                                    <span style="font-weight:400;color:var(--text-tertiary);font-size:11px;margin-left:8px;">${secItems.length} items</span>
+                                    <span style="float:right;" onclick="event.stopPropagation();">
+                                        <button onclick="editSection(${sec.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:11px;padding:2px 4px;" title="Rename">&#9998;</button>
+                                        <button onclick="deleteSection(${sec.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);font-size:11px;padding:2px 4px;" title="Delete section">&#10005;</button>
+                                    </span>
+                                </td>
+                            </tr>
+                            ${secItems.map(item => renderSOVItemRow(item, bidId, intelMap, sec.id)).join('')}`;
                         }).join('')}
                     </tbody>
                 </table>
-            </div>`}
+            </div>
+
+            ${outOfScopeItems.length > 0 ? `
+            <div style="margin-top:24px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;" onclick="document.getElementById('outOfScopeTable').style.display = document.getElementById('outOfScopeTable').style.display === 'none' ? 'block' : 'none'; document.getElementById('oos-chevron').textContent = document.getElementById('outOfScopeTable').style.display === 'none' ? '▶' : '▼';">
+                    <span id="oos-chevron" style="color:var(--text-tertiary);font-size:12px;">&#9660;</span>
+                    <h4 style="margin:0;font-size:13px;font-weight:600;color:var(--text-tertiary);">Out of Scope Items</h4>
+                    <span style="font-size:11px;color:var(--text-tertiary);">(${outOfScopeItems.length})</span>
+                </div>
+                <div id="outOfScopeTable" class="card" style="padding:0;overflow-x:auto;opacity:0.7;">
+                    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                        <thead>
+                            <tr style="background:#F1F5F9;border-bottom:2px solid var(--border-default);">
+                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);width:60px;">#</th>
+                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);">Description</th>
+                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-tertiary);width:60px;">Unit</th>
+                                <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-tertiary);width:80px;">Qty</th>
+                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-tertiary);width:60px;">Scope</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${outOfScopeItems.map(item => `
+                            <tr style="border-bottom:1px solid var(--border-default);">
+                                <td style="padding:6px 12px;color:var(--text-tertiary);font-family:monospace;font-size:12px;">${escHtml(item.item_number || '—')}</td>
+                                <td style="padding:6px 12px;color:var(--text-tertiary);">${escHtml(item.description)}</td>
+                                <td style="padding:6px 12px;color:var(--text-tertiary);">${escHtml(item.unit || '—')}</td>
+                                <td style="padding:6px 12px;text-align:right;color:var(--text-tertiary);">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
+                                <td style="padding:6px 12px;text-align:center;">
+                                    <input type="checkbox" onchange="toggleItemScope(${item.id}, ${bidId}, true)" style="cursor:pointer;" title="Check to bring back in scope">
+                                </td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>` : ''}`}
         `;
     } catch (err) {
         tc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
     }
+}
+
+function renderSOVItemRow(item, bidId, intelMap, sectionId) {
+    const intel = intelMap[item.id];
+    const intelBadge = intel ? sovIntelBadge(intel) : '<span style="color:var(--text-tertiary);font-size:11px;">—</span>';
+    const wt = item.work_type || 'undecided';
+    const wtLabel = WORK_TYPE_LABELS[wt] || '—';
+    const wtColor = WORK_TYPE_COLORS[wt] || 'var(--text-tertiary)';
+    const leftBorder = WORK_TYPE_BORDER[wt] || '';
+    const isHolding = item.is_holding_account === 1;
+    const holdingBg = isHolding ? 'background:rgba(6,182,212,0.04);' : '';
+    const isSelected = window._sovSelectedIds && window._sovSelectedIds.has(item.id);
+
+    return `
+    <tr style="${leftBorder ? `border-left:${leftBorder};` : ''}border-bottom:1px solid var(--border-default);cursor:pointer;${holdingBg}" id="sov-row-${item.id}" class="sov-item-row ${sectionId ? `section-${sectionId}` : 'section-unsectioned'}" onclick="toggleSOVItemDetail(${item.id}, ${bidId})">
+        <td style="padding:6px 8px;text-align:center;" onclick="event.stopPropagation();">
+            <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSOVSelect(${item.id}, this.checked, ${bidId})" style="cursor:pointer;">
+        </td>
+        <td style="padding:6px 8px;color:var(--text-secondary);font-family:monospace;font-size:12px;">${escHtml(item.item_number || '—')}</td>
+        <td style="padding:6px 8px;font-family:monospace;font-size:12px;" onclick="event.stopPropagation();">
+            <span class="sov-hcss-editable" onclick="editHCSSNumber(${item.id}, ${bidId}, this)" style="cursor:text;min-width:30px;display:inline-block;color:${item.hcss_number ? 'var(--text-primary)' : 'var(--text-tertiary)'};">${escHtml(item.hcss_number || '—')}</span>
+        </td>
+        <td style="padding:6px 8px;">
+            ${escHtml(item.description)}
+            ${isHolding ? `<br><span style="font-size:10px;color:var(--text-tertiary);font-style:italic;">&#9881; ${escHtml(item.holding_description || 'Holding account')}</span>` : ''}
+        </td>
+        <td style="padding:6px 8px;text-align:center;" onclick="event.stopPropagation();">
+            <span onclick="cycleWorkType(${item.id}, ${bidId}, '${wt}')" style="cursor:pointer;font-size:11px;font-weight:600;color:${wtColor};padding:2px 6px;border-radius:4px;${wt !== 'undecided' ? `background:${wtColor}11;` : ''}" title="Click to change: ${wt.replace('_', ' ')}">${wtLabel}</span>
+        </td>
+        <td style="padding:6px 8px;color:var(--text-secondary);font-size:12px;">${escHtml(item.unit || '—')}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:12px;">${item.quantity != null ? fmt(item.quantity, 1) : '—'}</td>
+        <td style="padding:6px 8px;text-align:center;">${intelBadge}</td>
+        <td style="padding:6px 8px;text-align:center;" onclick="event.stopPropagation();">
+            <button onclick="editSOVItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);padding:2px;" title="Edit">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <button onclick="deleteSOVItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);padding:2px;" title="Delete">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <input type="checkbox" checked onchange="toggleItemScope(${item.id}, ${bidId}, false)" style="cursor:pointer;margin-left:2px;vertical-align:middle;" title="In scope — uncheck to exclude">
+        </td>
+    </tr>
+    <tr class="sov-item-row ${sectionId ? `section-${sectionId}` : 'section-unsectioned'}"><td colspan="9" style="padding:0;"><div id="detail-panel-${item.id}" style="display:none;"></div></td></tr>`;
 }
 
 function showSOVUpload(bidId) {
@@ -3461,31 +3554,32 @@ async function addSOVItem(bidId) {
 }
 
 async function editSOVItem(itemId, bidId) {
-    // Inline edit: replace row content
     const row = document.getElementById(`sov-row-${itemId}`);
     if (!row) return;
 
-    // Fetch current data
     try {
         const items = await api(`/bidding/bids/${bidId}/sov`);
         const item = items.find(i => i.id === itemId);
         if (!item) return;
 
-        const groups = await api(`/bidding/bids/${bidId}/groups`);
+        const sections = await api(`/bidding/bids/${bidId}/sections`);
 
         row.innerHTML = `
+            <td style="padding:4px 6px;"></td>
             <td style="padding:4px 6px;"><input type="text" id="edit_num_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${escAttr(item.item_number || '')}"></td>
+            <td style="padding:4px 6px;"><input type="text" id="edit_hcss_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${escAttr(item.hcss_number || '')}"></td>
             <td style="padding:4px 6px;"><input type="text" id="edit_desc_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${escAttr(item.description || '')}"></td>
-            <td style="padding:4px 6px;"><input type="text" id="edit_unit_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${escAttr(item.unit || '')}"></td>
-            <td style="padding:4px 6px;"><input type="number" id="edit_qty_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${item.quantity || ''}"></td>
             <td style="padding:4px 6px;">
-                <select id="edit_grp_${itemId}" class="search-input" style="width:100%;font-size:12px;">
+                <select id="edit_sec_${itemId}" class="search-input" style="width:100%;font-size:11px;">
                     <option value="">None</option>
-                    ${groups.map(g => `<option value="${g.id}" ${item.pricing_group_id === g.id ? 'selected' : ''}>${escHtml(g.name)}</option>`).join('')}
+                    ${sections.map(s => `<option value="${s.id}" ${item.section_id === s.id ? 'selected' : ''}>${escHtml(s.name)}</option>`).join('')}
                 </select>
             </td>
-            <td style="padding:4px 6px;text-align:center;">
+            <td style="padding:4px 6px;"><input type="text" id="edit_unit_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${escAttr(item.unit || '')}"></td>
+            <td style="padding:4px 6px;"><input type="number" id="edit_qty_${itemId}" class="search-input" style="width:100%;font-size:12px;" value="${item.quantity || ''}"></td>
+            <td colspan="2" style="padding:4px 6px;text-align:center;">
                 <button onclick="saveSOVEdit(${itemId}, ${bidId})" class="btn btn-primary btn-sm" style="font-size:11px;padding:2px 8px;">Save</button>
+                <button onclick="renderBidSOV(${bidId})" class="btn btn-sm" style="font-size:11px;padding:2px 8px;">Cancel</button>
             </td>
         `;
     } catch (err) {
@@ -3495,15 +3589,16 @@ async function editSOVItem(itemId, bidId) {
 
 async function saveSOVEdit(itemId, bidId) {
     try {
-        const grpVal = document.getElementById(`edit_grp_${itemId}`).value;
+        const secVal = document.getElementById(`edit_sec_${itemId}`).value;
         await api(`/bidding/sov/${itemId}`, {
             method: 'PUT',
             body: JSON.stringify({
                 item_number: document.getElementById(`edit_num_${itemId}`).value.trim() || null,
+                hcss_number: document.getElementById(`edit_hcss_${itemId}`).value.trim() || null,
                 description: document.getElementById(`edit_desc_${itemId}`).value.trim(),
                 unit: document.getElementById(`edit_unit_${itemId}`).value.trim() || null,
                 quantity: parseFloat(document.getElementById(`edit_qty_${itemId}`).value) || null,
-                pricing_group_id: grpVal ? parseInt(grpVal) : null,
+                section_id: secVal ? parseInt(secVal) : null,
             }),
         });
         renderBidSOV(bidId);
@@ -3522,59 +3617,154 @@ async function deleteSOVItem(itemId, bidId) {
     }
 }
 
-// ── Pricing Group Manager ──
+// ── Section Management ──
 
-async function showGroupManager(bidId) {
-    const mgr = document.getElementById('groupManager');
-    if (mgr.style.display === 'block') { mgr.style.display = 'none'; return; }
-    mgr.style.display = 'block';
-
-    try {
-        const groups = await api(`/bidding/bids/${bidId}/groups`);
-        mgr.innerHTML = `
-            <div class="card" style="padding:16px;margin-bottom:16px;">
-                <h4 style="font-size:13px;font-weight:600;margin:0 0 12px;">Pricing Groups</h4>
-                ${groups.map((g, i) => `
-                    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-default);">
-                        <span style="width:10px;height:10px;border-radius:50%;background:${GROUP_COLORS[i % GROUP_COLORS.length]};flex-shrink:0;"></span>
-                        <span style="flex:1;font-size:13px;">${escHtml(g.name)}</span>
-                        <span style="font-size:11px;color:var(--text-tertiary);">${g.item_count} items</span>
-                        <button onclick="deleteGroup(${g.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--danger-red);font-size:11px;">Delete</button>
-                    </div>
-                `).join('')}
-                <div style="display:flex;gap:8px;margin-top:12px;">
-                    <input type="text" id="new_group_name" class="search-input" placeholder="New group name..." style="flex:1;">
-                    <button class="btn btn-primary btn-sm" onclick="createGroup(${bidId})">Add</button>
-                </div>
+function showAddSection(bidId) {
+    const form = document.getElementById('sectionAddForm');
+    if (form.style.display === 'block') { form.style.display = 'none'; return; }
+    form.style.display = 'block';
+    form.innerHTML = `
+        <div class="card" style="padding:12px;margin-bottom:16px;">
+            <div style="display:flex;gap:8px;align-items:center;">
+                <input type="text" id="new_section_name" class="search-input" placeholder="Section name (e.g. Division 3 — Concrete)" style="flex:1;font-size:13px;">
+                <button class="btn btn-primary btn-sm" onclick="createSection(${bidId})">Create</button>
+                <button class="btn btn-sm" onclick="document.getElementById('sectionAddForm').style.display='none'">Cancel</button>
             </div>
-        `;
-    } catch (err) {
-        mgr.innerHTML = `<p>Error loading groups: ${escHtml(err.message)}</p>`;
-    }
+        </div>
+    `;
+    document.getElementById('new_section_name').focus();
 }
 
-async function createGroup(bidId) {
-    const name = document.getElementById('new_group_name').value.trim();
+async function createSection(bidId) {
+    const name = document.getElementById('new_section_name').value.trim();
     if (!name) return;
     try {
-        await api(`/bidding/bids/${bidId}/groups`, {
+        await api(`/bidding/bids/${bidId}/sections`, {
             method: 'POST',
             body: JSON.stringify({ name }),
         });
-        showGroupManager(bidId);
-        // Force refresh to update dropdown
-        document.getElementById('groupManager').style.display = 'none';
-        showGroupManager(bidId);
+        document.getElementById('sectionAddForm').style.display = 'none';
+        renderBidSOV(bidId);
     } catch (err) {
         alert('Error: ' + err.message);
     }
 }
 
-async function deleteGroup(groupId, bidId) {
-    if (!confirm('Delete this pricing group? Items will be ungrouped.')) return;
+async function editSection(sectionId, bidId) {
+    const newName = prompt('Rename section:');
+    if (!newName || !newName.trim()) return;
     try {
-        await api(`/bidding/groups/${groupId}`, { method: 'DELETE' });
-        showGroupManager(bidId);
+        await api(`/bidding/sections/${sectionId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ name: newName.trim() }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function deleteSection(sectionId, bidId) {
+    if (!confirm('Delete this section? Items will become unassigned.')) return;
+    try {
+        await api(`/bidding/sections/${sectionId}`, { method: 'DELETE' });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+function toggleSectionCollapse(sectionId) {
+    const rows = document.querySelectorAll(`.section-${sectionId}`);
+    const chevron = document.getElementById(`section-chevron-${sectionId}`);
+    const isCollapsed = rows.length > 0 && rows[0].style.display === 'none';
+    rows.forEach(r => { r.style.display = isCollapsed ? '' : 'none'; });
+    if (chevron) chevron.innerHTML = isCollapsed ? '&#9660;' : '&#9654;';
+}
+
+// ── HCSS Number Inline Edit ──
+
+function editHCSSNumber(itemId, bidId, el) {
+    const current = el.textContent === '—' ? '' : el.textContent;
+    el.innerHTML = `<input type="text" class="search-input" value="${escAttr(current)}" style="width:60px;font-size:12px;font-family:monospace;padding:1px 4px;" onblur="saveHCSSNumber(${itemId}, ${bidId}, this.value)" onkeydown="if(event.key==='Enter'){this.blur();}">`;
+    el.querySelector('input').focus();
+}
+
+async function saveHCSSNumber(itemId, bidId, value) {
+    try {
+        await api(`/bidding/sov/${itemId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ hcss_number: value.trim() || null }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+// ── Work Type Cycling ──
+
+async function cycleWorkType(itemId, bidId, current) {
+    const cycle = { undecided: 'self_perform', self_perform: 'subcontract', subcontract: 'undecided' };
+    const next = cycle[current] || 'undecided';
+    try {
+        await api(`/bidding/sov/${itemId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ work_type: next }),
+        });
+        renderBidSOV(bidId);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+// ── SOV Multi-Select ──
+
+function toggleSOVSelect(itemId, checked, bidId) {
+    if (!window._sovSelectedIds) window._sovSelectedIds = new Set();
+    if (checked) window._sovSelectedIds.add(itemId);
+    else window._sovSelectedIds.delete(itemId);
+    updateSOVBulkActions(bidId);
+}
+
+function toggleAllSOVSelect(checked, bidId) {
+    const checkboxes = document.querySelectorAll('#sovMainTable .sov-item-row input[type="checkbox"]');
+    window._sovSelectedIds = new Set();
+    checkboxes.forEach(cb => {
+        cb.checked = checked;
+        if (checked) {
+            const match = cb.getAttribute('onchange')?.match(/toggleSOVSelect\((\d+)/);
+            if (match) window._sovSelectedIds.add(parseInt(match[1]));
+        }
+    });
+    updateSOVBulkActions(bidId);
+}
+
+function clearSOVSelection() {
+    window._sovSelectedIds = new Set();
+    document.querySelectorAll('#sovMainTable input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+    document.getElementById('sovBulkActions').style.display = 'none';
+}
+
+function updateSOVBulkActions(bidId) {
+    const bar = document.getElementById('sovBulkActions');
+    const count = window._sovSelectedIds ? window._sovSelectedIds.size : 0;
+    if (count > 0) {
+        bar.style.display = 'flex';
+        document.getElementById('sovSelectCount').textContent = `${count} selected`;
+    } else {
+        bar.style.display = 'none';
+    }
+}
+
+async function bulkSetWorkType(bidId, workType) {
+    if (!window._sovSelectedIds || window._sovSelectedIds.size === 0) return;
+    try {
+        await api(`/bidding/bids/${bidId}/sov/set-work-type`, {
+            method: 'POST',
+            body: JSON.stringify({ item_ids: [...window._sovSelectedIds], work_type: workType }),
+        });
+        window._sovSelectedIds = new Set();
         renderBidSOV(bidId);
     } catch (err) {
         alert('Error: ' + err.message);
@@ -4685,83 +4875,138 @@ async function mapSOVIntelligence(bidId) {
     }
 }
 
-async function toggleSOVIntelligence(itemId, bidId) {
-    const panel = document.getElementById(`intel-panel-${itemId}`);
+// ── Bid Item Detail View (Collapsible Accordion) ──
+
+async function toggleSOVItemDetail(itemId, bidId) {
+    const panel = document.getElementById(`detail-panel-${itemId}`);
     if (!panel) return;
 
     if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
 
-    // Close other intel panels
-    document.querySelectorAll('[id^="intel-panel-"]').forEach(p => { if (p.id !== `intel-panel-${itemId}`) p.style.display = 'none'; });
+    // Close other detail panels
+    document.querySelectorAll('[id^="detail-panel-"]').forEach(p => { if (p.id !== `detail-panel-${itemId}`) p.style.display = 'none'; });
 
     panel.style.display = 'block';
-    panel.innerHTML = '<p style="font-size:12px;color:var(--text-tertiary);padding:12px;">Loading intelligence...</p>';
+    panel.innerHTML = '<p style="font-size:12px;color:var(--text-tertiary);padding:12px;">Loading item detail...</p>';
 
     try {
-        const data = await api(`/bidding/bids/${bidId}/sov/${itemId}/intelligence`);
-        panel.innerHTML = renderSOVIntelligencePanel(data, itemId);
+        const [intelData, rateData] = await Promise.all([
+            api(`/bidding/bids/${bidId}/sov/${itemId}/intelligence`).catch(() => null),
+            api(`/bidding/bids/${bidId}/sov/${itemId}/rates`).catch(() => null),
+        ]);
+        panel.innerHTML = renderBidItemDetail(intelData, rateData, itemId, bidId);
     } catch (err) {
-        panel.innerHTML = `<p style="font-size:12px;color:var(--danger-red);padding:12px;">Error loading intelligence: ${escHtml(err.message)}</p>`;
+        panel.innerHTML = `<p style="font-size:12px;color:var(--danger-red);padding:12px;">Error: ${escHtml(err.message)}</p>`;
     }
 }
 
-function renderSOVIntelligencePanel(data, itemId) {
-    if (!data || data.total_findings === 0) {
-        return '<div style="padding:12px 16px;font-size:12px;color:var(--text-tertiary);background:var(--bg-hover);">No intelligence mapped for this item yet. Run agents and click "Map Intelligence".</div>';
-    }
+function renderBidItemDetail(intelData, rateData, itemId, bidId) {
+    const severityColors = {critical: '#EF4444', high: '#EF4444', medium: '#F59E0B', low: 'var(--success-green)', info: 'var(--text-tertiary)'};
 
     let html = '<div style="padding:12px 16px;background:var(--bg-hover);border-top:1px solid var(--border-default);">';
 
     // Stale warning
-    if (data.is_stale) {
+    if (intelData && intelData.is_stale) {
         html += '<div style="padding:6px 10px;margin-bottom:10px;background:#FFFBEB;border-left:3px solid #F59E0B;border-radius:var(--radius-sm);font-size:11px;color:#92400E;">&#9888; Intelligence may be outdated — re-map recommended.</div>';
     }
 
     // Estimator notes
-    if (data.estimator_notes) {
+    if (intelData && intelData.estimator_notes) {
         html += `<div style="padding:8px 10px;margin-bottom:10px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-sm);">
             <div style="font-size:11px;font-weight:600;color:var(--wollam-navy);margin-bottom:4px;">ESTIMATOR NOTES</div>
-            <div style="font-size:12px;color:var(--text-primary);">${escHtml(data.estimator_notes)}</div>
+            <div style="font-size:12px;color:var(--text-primary);">${escHtml(intelData.estimator_notes)}</div>
         </div>`;
     }
 
     // Spec sections
-    if (data.spec_sections_summary) {
-        html += `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;"><strong>Relevant Specs:</strong> ${escHtml(data.spec_sections_summary)}</div>`;
+    if (intelData && intelData.spec_sections_summary) {
+        html += `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;"><strong>Relevant Specs:</strong> ${escHtml(intelData.spec_sections_summary)}</div>`;
     }
 
-    // Domain sections in order
-    const domainOrder = [
+    // Accordion sections by domain
+    const domainSections = [
+        { key: 'historical_rates', label: 'Historical Rates', icon: '&#128200;' },
         { key: 'missing_information', label: 'Missing Information & Clarifications', icon: '&#10067;' },
-        { key: 'legal', label: 'Contract & Legal', icon: '&#9878;' },
         { key: 'qaqc', label: 'QA/QC Requirements', icon: '&#128269;' },
-        { key: 'subcontract', label: 'Subcontract Scope', icon: '&#128295;' },
+        { key: 'legal', label: 'Legal & Contract', icon: '&#9878;' },
+        { key: 'subcontract', label: 'Subcontract Recommendations', icon: '&#128295;' },
         { key: 'document_control', label: 'Document Control', icon: '&#128196;' },
-        { key: 'drawing', label: 'Drawings', icon: '&#128208;' },
+        { key: 'drawing', label: 'Drawing References', icon: '&#128208;' },
     ];
 
-    domainOrder.forEach(d => {
-        const findings = data.domains[d.key];
-        if (!findings || findings.length === 0) return;
+    domainSections.forEach(d => {
+        let findings = [];
+        let sectionContent = '';
+        let statusText = '';
 
-        if (d.key === 'missing_information') {
-            html += renderMissingInfoSection(findings);
-        } else {
-            html += renderDomainSection(d.key, findings, d.label, d.icon);
+        if (d.key === 'historical_rates') {
+            // Rate lookup section
+            const hasRate = rateData && rateData.unit_price != null;
+            statusText = hasRate ? `Applied: $${fmtRate(rateData.unit_price)} (${(rateData.rate_confidence || 'unknown').toUpperCase()})` : 'Not yet looked up';
+            sectionContent = `
+                <div style="padding:8px;">
+                    ${hasRate ? `<div style="margin-bottom:8px;font-size:12px;">Current rate: <strong>$${fmtRate(rateData.unit_price)}</strong> (${escHtml(rateData.rate_confidence || 'unknown')})<br><span style="font-size:11px;color:var(--text-tertiary);">Source: ${escHtml(rateData.rate_source || 'N/A')}</span></div>` : ''}
+                    <button class="btn btn-sm" onclick="event.stopPropagation();lookupSOVRate(${itemId}, ${bidId})" style="font-size:11px;">Look Up Rates</button>
+                    <div id="rate-panel-${itemId}" style="margin-top:8px;"></div>
+                </div>`;
+        } else if (intelData && intelData.domains && intelData.domains[d.key]) {
+            findings = intelData.domains[d.key];
         }
+
+        const count = d.key === 'historical_rates' ? '' : findings.length;
+        const maxSev = findings.length > 0 ? findings.reduce((max, f) => {
+            const order = {critical: 5, high: 4, medium: 3, low: 2, info: 1};
+            return (order[f.severity] || 0) > (order[max] || 0) ? f.severity : max;
+        }, 'info') : null;
+        const sevBadge = maxSev && maxSev !== 'info' ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${severityColors[maxSev] || 'var(--text-tertiary)'};margin-left:6px;"></span>` : '';
+        const isMuted = d.key !== 'historical_rates' && findings.length === 0;
+
+        const sectionId = `detail-section-${itemId}-${d.key}`;
+        html += `
+        <div style="margin-bottom:4px;border:1px solid var(--border-default);border-radius:var(--radius-sm);overflow:hidden;${isMuted ? 'opacity:0.5;' : ''}">
+            <div onclick="toggleDetailSection('${sectionId}')" style="padding:8px 12px;background:var(--bg-surface);cursor:pointer;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border-default);user-select:none;">
+                <span id="${sectionId}-chevron" style="font-size:10px;color:var(--text-tertiary);transition:transform 0.2s;">&#9654;</span>
+                <span style="font-size:12px;font-weight:600;color:var(--wollam-navy);">${d.icon} ${d.label}</span>
+                ${d.key !== 'historical_rates' ? `<span style="font-size:10px;color:var(--text-tertiary);">(${count})</span>` : `<span style="font-size:10px;color:var(--text-tertiary);">${statusText}</span>`}
+                ${sevBadge}
+            </div>
+            <div id="${sectionId}" style="display:none;padding:8px 12px;">`;
+
+        if (d.key === 'historical_rates') {
+            html += sectionContent;
+        } else if (findings.length === 0) {
+            html += '<p style="font-size:11px;color:var(--text-tertiary);margin:0;">No findings for this domain.</p>';
+        } else if (d.key === 'missing_information') {
+            html += renderMissingInfoFindings(findings);
+        } else {
+            html += renderDomainFindings(findings);
+        }
+
+        html += '</div></div>';
     });
+
+    if (!intelData || (intelData.total_findings === 0 && !(rateData && rateData.unit_price != null))) {
+        html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:8px;">Run agents and click "Map Intelligence" to populate domain sections.</div>';
+    }
 
     html += '</div>';
     return html;
 }
 
-function renderMissingInfoSection(findings) {
+function toggleDetailSection(sectionId) {
+    const el = document.getElementById(sectionId);
+    const chevron = document.getElementById(`${sectionId}-chevron`);
+    if (!el) return;
+    const isOpen = el.style.display !== 'none';
+    el.style.display = isOpen ? 'none' : 'block';
+    if (chevron) chevron.innerHTML = isOpen ? '&#9654;' : '&#9660;';
+}
+
+function renderMissingInfoFindings(findings) {
     const actionColors = { rfi: '#EF4444', clarification: '#F59E0B', verify: '#3B82F6', assumption: '#94A3B8' };
     const actionLabels = { rfi: 'RFI', clarification: 'CLARIFY', verify: 'VERIFY', assumption: 'ASSUME' };
 
-    let html = `<div style="margin-bottom:10px;">
-        <div style="font-size:11px;font-weight:600;color:var(--wollam-navy);margin-bottom:6px;">&#10067; MISSING INFORMATION & CLARIFICATIONS</div>`;
-
+    let html = '';
     findings.forEach(f => {
         const meta = f.metadata || {};
         const action = meta.suggested_action || 'verify';
@@ -4778,21 +5023,15 @@ function renderMissingInfoSection(findings) {
             ${f.agent_name && f.agent_name !== 'sov_mapper' ? `<div style="font-size:10px;color:var(--text-tertiary);margin-top:2px;">Source: ${escHtml(f.agent_name.replace(/_/g, ' '))}</div>` : ''}
         </div>`;
     });
-
-    html += '</div>';
     return html;
 }
 
-function renderDomainSection(domain, findings, label, icon) {
+function renderDomainFindings(findings) {
     const severityColors = {critical: '#EF4444', high: '#EF4444', medium: '#F59E0B', low: 'var(--success-green)', info: 'var(--text-tertiary)'};
-
-    let html = `<div style="margin-bottom:10px;">
-        <div style="font-size:11px;font-weight:600;color:var(--wollam-navy);margin-bottom:6px;">${icon} ${label.toUpperCase()}</div>`;
-
+    let html = '';
     findings.forEach(f => {
         const sevColor = severityColors[f.severity] || 'var(--text-tertiary)';
-
-        html += `<div style="padding:6px 10px;margin-bottom:4px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:12px;">
+        html += `<div style="padding:6px 10px;margin-bottom:4px;background:var(--bg-surface);border:1px solid var(--border-default);border-left:3px solid ${sevColor};border-radius:var(--radius-sm);font-size:12px;">
             <div style="font-weight:500;color:var(--text-primary);">
                 ${f.severity && f.severity !== 'info' ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${sevColor};margin-right:4px;"></span>` : ''}
                 ${escHtml(f.title)}
@@ -4805,9 +5044,12 @@ function renderDomainSection(domain, findings, label, icon) {
             </div>
         </div>`;
     });
-
-    html += '</div>';
     return html;
+}
+
+// Keep legacy function name as alias for any external callers
+async function toggleSOVIntelligence(itemId, bidId) {
+    return toggleSOVItemDetail(itemId, bidId);
 }
 
 // ── Init ──
