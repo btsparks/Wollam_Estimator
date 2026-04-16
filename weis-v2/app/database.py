@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from app.config import DB_PATH
 
-SCHEMA_VERSION = "2.17"
+SCHEMA_VERSION = "2.18"
 
 SCHEMA_SQL = """
 -- ============================================================
@@ -1642,6 +1642,91 @@ def _migrate_2_16_to_2_17(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = '2.17'")
 
 
+def _migrate_2_17_to_2_18(conn: sqlite3.Connection) -> None:
+    """Migrate schema from 2.17 to 2.18: Procurement & Vendor Management.
+
+    Changes:
+    1. Create vendor_directory table (global)
+    2. Create procurement_item table (per-bid)
+    3. Create procurement_sov_link table
+    4. Create procurement_solicitation table
+    """
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS vendor_directory (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        vendor_type     TEXT NOT NULL,
+        trade           TEXT NOT NULL,
+        company         TEXT NOT NULL,
+        contact_name    TEXT,
+        city            TEXT,
+        state           TEXT,
+        phone           TEXT,
+        cell            TEXT,
+        email           TEXT,
+        website         TEXT,
+        fax             TEXT,
+        is_dbe          INTEGER DEFAULT 0,
+        specialties     TEXT,
+        second_contact  TEXT,
+        second_phone    TEXT,
+        second_email    TEXT,
+        notes           TEXT,
+        is_active       INTEGER DEFAULT 1,
+        created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_vendor_type ON vendor_directory(vendor_type);
+    CREATE INDEX IF NOT EXISTS idx_vendor_trade ON vendor_directory(trade);
+    CREATE INDEX IF NOT EXISTS idx_vendor_active ON vendor_directory(is_active);
+
+    CREATE TABLE IF NOT EXISTS procurement_item (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        bid_id            INTEGER NOT NULL REFERENCES active_bids(id) ON DELETE CASCADE,
+        name              TEXT NOT NULL,
+        description       TEXT,
+        procurement_type  TEXT NOT NULL DEFAULT 'subcontract',
+        trade_match       TEXT,
+        status            TEXT NOT NULL DEFAULT 'not_started',
+        priority          TEXT DEFAULT 'normal',
+        ai_suggested      INTEGER DEFAULT 0,
+        ai_source         TEXT,
+        target_send_date  DATE,
+        notes             TEXT,
+        created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_procurement_bid ON procurement_item(bid_id);
+
+    CREATE TABLE IF NOT EXISTS procurement_sov_link (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        procurement_item_id INTEGER NOT NULL REFERENCES procurement_item(id) ON DELETE CASCADE,
+        sov_item_id         INTEGER NOT NULL REFERENCES bid_sov_item(id) ON DELETE CASCADE,
+        UNIQUE(procurement_item_id, sov_item_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS procurement_solicitation (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        procurement_item_id INTEGER NOT NULL REFERENCES procurement_item(id) ON DELETE CASCADE,
+        vendor_id           INTEGER REFERENCES vendor_directory(id) ON DELETE SET NULL,
+        company_name        TEXT,
+        contact_name        TEXT,
+        contact_email       TEXT,
+        contact_phone       TEXT,
+        date_sent           DATE,
+        date_expected       DATE,
+        date_received       DATE,
+        quote_amount        REAL,
+        status              TEXT NOT NULL DEFAULT 'not_sent',
+        notes               TEXT,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_solicitation_item ON procurement_solicitation(procurement_item_id);
+    """)
+
+    conn.execute("UPDATE schema_version SET version = '2.18'")
+
+
 def init_db(db_path: Path = None) -> None:
     """Create all tables and indexes from the schema.
 
@@ -1740,6 +1825,9 @@ def init_db(db_path: Path = None) -> None:
                 current = "2.16"
             if current == "2.16":
                 _migrate_2_16_to_2_17(conn)
+                current = "2.17"
+            if current == "2.17":
+                _migrate_2_17_to_2_18(conn)
         conn.commit()
         print(f"Database initialized at {db_path or DB_PATH} (schema v{SCHEMA_VERSION})")
     finally:

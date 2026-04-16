@@ -27,6 +27,9 @@ def cleanup_test_bids():
         conn = get_connection()
         try:
             for bid_id in _test_bid_ids:
+                conn.execute("DELETE FROM procurement_solicitation WHERE procurement_item_id IN (SELECT id FROM procurement_item WHERE bid_id = ?)", (bid_id,))
+                conn.execute("DELETE FROM procurement_sov_link WHERE procurement_item_id IN (SELECT id FROM procurement_item WHERE bid_id = ?)", (bid_id,))
+                conn.execute("DELETE FROM procurement_item WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM rfi_log WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM drawing_register WHERE bid_id = ?", (bid_id,))
                 conn.execute("DELETE FROM spec_register WHERE bid_id = ?", (bid_id,))
@@ -1011,3 +1014,330 @@ class TestRefreshPipeline:
         """Refresh endpoint returns 404 for invalid bid."""
         res = client.get("/api/bidding/bids/99999/refresh-stream")
         assert res.status_code == 404
+
+
+# ══════════════════════════════════════════════════════════════
+# PART D TESTS — Vendors, Procurement, Solicitations, Gap Analysis
+# ══════════════════════════════════════════════════════════════
+
+
+# Track vendor IDs for cleanup
+_test_vendor_ids = []
+
+@pytest.fixture(autouse=True)
+def cleanup_test_vendors():
+    """Clean up any vendors created during tests."""
+    _test_vendor_ids.clear()
+    yield
+    if _test_vendor_ids:
+        conn = get_connection()
+        try:
+            for vid in _test_vendor_ids:
+                conn.execute("DELETE FROM vendor_directory WHERE id = ?", (vid,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+class TestVendorCRUD:
+
+    def test_create_vendor(self):
+        res = client.post("/api/vendors", json={
+            "trade": "Electrical",
+            "company": "Test Electric Co",
+            "vendor_type": "construction",
+            "contact_name": "John Doe",
+            "phone": "(801) 555-1234",
+        })
+        assert res.status_code == 200
+        v = res.json()
+        _test_vendor_ids.append(v["id"])
+        assert v["trade"] == "Electrical"
+        assert v["company"] == "Test Electric Co"
+        assert v["is_active"] == 1
+
+    def test_list_vendors(self):
+        v = client.post("/api/vendors", json={"trade": "Concrete", "company": "Concrete Corp", "vendor_type": "construction"}).json()
+        _test_vendor_ids.append(v["id"])
+
+        res = client.get("/api/vendors")
+        assert res.status_code == 200
+        vendors = res.json()
+        assert any(x["id"] == v["id"] for x in vendors)
+
+    def test_list_vendors_search(self):
+        v = client.post("/api/vendors", json={"trade": "Welding", "company": "UniqueWeldCo123", "vendor_type": "construction"}).json()
+        _test_vendor_ids.append(v["id"])
+
+        res = client.get("/api/vendors?search=UniqueWeldCo123")
+        vendors = res.json()
+        assert len(vendors) >= 1
+        assert vendors[0]["company"] == "UniqueWeldCo123"
+
+    def test_update_vendor(self):
+        v = client.post("/api/vendors", json={"trade": "Steel", "company": "Steel Inc", "vendor_type": "materials"}).json()
+        _test_vendor_ids.append(v["id"])
+
+        res = client.put(f"/api/vendors/{v['id']}", json={"contact_name": "Jane Smith"})
+        assert res.status_code == 200
+        assert res.json()["contact_name"] == "Jane Smith"
+
+    def test_soft_delete_vendor(self):
+        v = client.post("/api/vendors", json={"trade": "Paint", "company": "Paint Co", "vendor_type": "construction"}).json()
+        _test_vendor_ids.append(v["id"])
+
+        res = client.delete(f"/api/vendors/{v['id']}")
+        assert res.status_code == 200
+        assert res.json()["archived"] is True
+
+        # Should not appear in active list
+        active = client.get("/api/vendors").json()
+        assert not any(x["id"] == v["id"] for x in active)
+
+        # Should appear with include_archived
+        all_v = client.get("/api/vendors?include_archived=true").json()
+        assert any(x["id"] == v["id"] for x in all_v)
+
+    def test_list_trades(self):
+        v = client.post("/api/vendors", json={"trade": "HVAC_Test_Trade", "company": "HVAC Co", "vendor_type": "construction"}).json()
+        _test_vendor_ids.append(v["id"])
+
+        res = client.get("/api/vendors/trades")
+        assert res.status_code == 200
+        trades = res.json()
+        assert any(t["trade"] == "HVAC_Test_Trade" for t in trades)
+
+    def test_export_vendors(self):
+        res = client.get("/api/vendors/export")
+        assert res.status_code == 200
+
+    def test_vendor_not_found(self):
+        res = client.get("/api/vendors/99999")
+        assert res.status_code == 404
+
+
+class TestProcurementCRUD:
+
+    def test_create_procurement_item(self):
+        bid = create_test_bid()
+        res = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={
+            "name": "Electrical Sub",
+            "procurement_type": "subcontract",
+            "trade_match": "Electrical",
+        })
+        assert res.status_code == 200
+        item = res.json()
+        assert item["name"] == "Electrical Sub"
+        assert item["procurement_type"] == "subcontract"
+        assert item["status"] == "not_started"
+
+    def test_list_procurement(self):
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Item A"})
+        client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Item B"})
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/procurement")
+        assert res.status_code == 200
+        items = res.json()
+        assert len(items) == 2
+        # Should include solicitations and sov_links arrays
+        assert "solicitations" in items[0]
+        assert "sov_links" in items[0]
+
+    def test_update_procurement(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Test"}).json()
+
+        res = client.put(f"/api/bidding/procurement/{item['id']}", json={"status": "rfp_sent"})
+        assert res.status_code == 200
+        assert res.json()["status"] == "rfp_sent"
+
+    def test_delete_procurement(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Delete Me"}).json()
+
+        res = client.delete(f"/api/bidding/procurement/{item['id']}")
+        assert res.status_code == 200
+
+        remaining = client.get(f"/api/bidding/bids/{bid['id']}/procurement").json()
+        assert len(remaining) == 0
+
+    def test_procurement_dashboard(self):
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "A"})
+        client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "B", "status": "rfp_sent"})
+
+        res = client.get(f"/api/bidding/bids/{bid['id']}/procurement/dashboard")
+        assert res.status_code == 200
+        d = res.json()
+        assert d["total_items"] == 2
+        assert d["by_status"]["not_started"] == 1
+        assert d["by_status"]["rfp_sent"] == 1
+
+    def test_export_procurement(self):
+        bid = create_test_bid()
+        client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Export Test"})
+        res = client.get(f"/api/bidding/bids/{bid['id']}/procurement/export")
+        assert res.status_code == 200
+
+
+class TestSolicitations:
+
+    def test_add_solicitation(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Test"}).json()
+
+        res = client.post(f"/api/bidding/procurement/{item['id']}/solicitations", json={
+            "company_name": "ABC Electric",
+            "contact_name": "Bob",
+            "status": "not_sent",
+        })
+        assert res.status_code == 200
+        sol = res.json()
+        assert sol["company_name"] == "ABC Electric"
+        assert sol["status"] == "not_sent"
+
+    def test_update_solicitation(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Test"}).json()
+        sol = client.post(f"/api/bidding/procurement/{item['id']}/solicitations", json={
+            "company_name": "XYZ Corp",
+        }).json()
+
+        res = client.put(f"/api/bidding/procurement/solicitations/{sol['id']}", json={
+            "status": "received",
+            "quote_amount": 125000.00,
+        })
+        assert res.status_code == 200
+        assert res.json()["status"] == "received"
+        assert res.json()["quote_amount"] == 125000.00
+
+    def test_delete_solicitation(self):
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Test"}).json()
+        sol = client.post(f"/api/bidding/procurement/{item['id']}/solicitations", json={
+            "company_name": "Del Corp",
+        }).json()
+
+        res = client.delete(f"/api/bidding/procurement/solicitations/{sol['id']}")
+        assert res.status_code == 200
+
+    def test_solicitation_auto_populates_from_vendor(self):
+        """When vendor_id is provided, contact info auto-populates."""
+        v = client.post("/api/vendors", json={
+            "trade": "Testing", "company": "TestLab Inc",
+            "contact_name": "Lab Contact", "email": "lab@test.com",
+            "vendor_type": "construction",
+        }).json()
+        _test_vendor_ids.append(v["id"])
+
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Testing"}).json()
+
+        res = client.post(f"/api/bidding/procurement/{item['id']}/solicitations", json={
+            "vendor_id": v["id"],
+        })
+        assert res.status_code == 200
+        sol = res.json()
+        assert sol["company_name"] == "TestLab Inc"
+        assert sol["contact_name"] == "Lab Contact"
+        assert sol["contact_email"] == "lab@test.com"
+
+
+class TestSOVLinkage:
+
+    def test_link_sov_items(self):
+        bid = create_test_bid()
+        sov = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Concrete"}).json()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Concrete Sub"}).json()
+
+        res = client.post(f"/api/bidding/procurement/{item['id']}/link-sov", json={
+            "sov_item_ids": [sov["id"]],
+        })
+        assert res.status_code == 200
+        assert res.json()["linked"] == 1
+
+        # Verify link shows up in procurement list
+        items = client.get(f"/api/bidding/bids/{bid['id']}/procurement").json()
+        assert len(items[0]["sov_links"]) == 1
+        assert items[0]["sov_links"][0]["sov_item_id"] == sov["id"]
+
+    def test_unlink_sov_item(self):
+        bid = create_test_bid()
+        sov = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Steel"}).json()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={"name": "Steel Sub"}).json()
+        client.post(f"/api/bidding/procurement/{item['id']}/link-sov", json={"sov_item_ids": [sov["id"]]})
+
+        res = client.delete(f"/api/bidding/procurement/{item['id']}/link-sov/{sov['id']}")
+        assert res.status_code == 200
+
+
+class TestGapAnalysis:
+
+    def test_gap_analysis_finds_unlinked_subs(self):
+        """Subcontract SOV items without procurement links should be flagged."""
+        bid = create_test_bid()
+        sov = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Electrical Work"}).json()
+        client.put(f"/api/bidding/sov/{sov['id']}", json={"work_type": "subcontract"})
+
+        res = client.post(f"/api/bidding/bids/{bid['id']}/procurement/analyze-gaps")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["count"] >= 1
+        assert any("Electrical" in s["name"] for s in data["suggestions"])
+
+    def test_gap_analysis_excludes_out_of_scope(self):
+        """Out-of-scope items must be invisible to gap analysis."""
+        bid = create_test_bid()
+        in_scope = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "In Scope Sub"}).json()
+        out_scope = client.post(f"/api/bidding/bids/{bid['id']}/sov", json={"description": "Out Scope Sub"}).json()
+
+        client.put(f"/api/bidding/sov/{in_scope['id']}", json={"work_type": "subcontract"})
+        client.put(f"/api/bidding/sov/{out_scope['id']}", json={"work_type": "subcontract"})
+        client.post(f"/api/bidding/bids/{bid['id']}/sov/set-scope", json={
+            "item_ids": [out_scope["id"]], "in_scope": 0,
+        })
+
+        res = client.post(f"/api/bidding/bids/{bid['id']}/procurement/analyze-gaps")
+        data = res.json()
+        # Only the in-scope item should produce a suggestion
+        sov_ids_in_suggestions = set()
+        for s in data["suggestions"]:
+            sov_ids_in_suggestions.update(s.get("related_sov_items", []))
+        assert in_scope["id"] in sov_ids_in_suggestions or data["count"] >= 1
+        assert out_scope["id"] not in sov_ids_in_suggestions
+
+    def test_accept_suggestions(self):
+        bid = create_test_bid()
+        res = client.post(f"/api/bidding/bids/{bid['id']}/procurement/accept-suggestions", json={
+            "suggestions": [
+                {"name": "Test Sub", "procurement_type": "subcontract", "ai_source": "test"},
+            ],
+        })
+        assert res.status_code == 200
+        assert res.json()["created"] == 1
+
+        items = client.get(f"/api/bidding/bids/{bid['id']}/procurement").json()
+        assert len(items) == 1
+        assert items[0]["ai_suggested"] == 1
+
+
+class TestVendorSuggestion:
+
+    def test_suggest_vendors_by_trade(self):
+        v = client.post("/api/vendors", json={
+            "trade": "Electrical_Test_Suggest", "company": "Suggest Electric",
+            "vendor_type": "construction",
+        }).json()
+        _test_vendor_ids.append(v["id"])
+
+        bid = create_test_bid()
+        item = client.post(f"/api/bidding/bids/{bid['id']}/procurement", json={
+            "name": "Electrical Sub", "trade_match": "Electrical_Test_Suggest",
+        }).json()
+
+        res = client.get(f"/api/bidding/procurement/{item['id']}/suggest-vendors")
+        assert res.status_code == 200
+        vendors = res.json()
+        assert len(vendors) >= 1
+        assert vendors[0]["company"] == "Suggest Electric"

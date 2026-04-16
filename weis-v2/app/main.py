@@ -20,6 +20,8 @@ from app.api.bidding import router as bidding_router
 from app.api.agents import router as agents_router
 from app.api.vector import router as vector_router
 from app.api.sov_intelligence import router as sov_intelligence_router
+from app.api.vendors import router as vendors_router
+from app.api.procurement import router as procurement_router
 
 # Initialize database (runs migrations if needed)
 init_db()
@@ -41,6 +43,8 @@ app.include_router(sov_intelligence_router)  # Before bidding — more specific 
 app.include_router(bidding_router)
 app.include_router(agents_router)
 app.include_router(vector_router)
+app.include_router(vendors_router)
+app.include_router(procurement_router)
 
 # Static files (CSS, JS, assets)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

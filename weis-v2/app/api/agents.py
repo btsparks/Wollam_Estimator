@@ -398,6 +398,16 @@ async def refresh_intelligence_stream(bid_id: int):
             except Exception as e:
                 logger.warning("SOV mapping failed: %s", e)
 
+            # Stage 5: Analyze procurement gaps
+            q.put(json.dumps({"type": "stage", "stage": "procurement", "message": "Analyzing procurement gaps..."}))
+            procurement_gaps = 0
+            try:
+                from app.services.procurement_analyzer import analyze_procurement_gaps
+                gaps = analyze_procurement_gaps(bid_id)
+                procurement_gaps = len(gaps)
+            except Exception as e:
+                logger.warning("Procurement gap analysis failed: %s", e)
+
             q.put(json.dumps({
                 "type": "done",
                 "result": {
@@ -406,6 +416,7 @@ async def refresh_intelligence_stream(bid_id: int):
                     "specs_found": specs_found,
                     "rfis_parsed": rfis_parsed,
                     "items_mapped": items_mapped,
+                    "procurement_gaps": procurement_gaps,
                 },
             }))
         except Exception as e:

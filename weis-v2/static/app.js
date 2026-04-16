@@ -88,6 +88,8 @@ function navigate(page, jobId = null) {
         loadBidDetail(jobId);
     } else if (page === 'bidding') {
         loadBidBoard();
+    } else if (page === 'vendors') {
+        loadVendorDirectory();
     } else if (page === 'settings') {
         renderSettings();
     }
@@ -3035,6 +3037,7 @@ async function renderBidDetail(bid) {
             <button class="filter-tab ${tab === 'sov' ? 'active' : ''}" onclick="switchBidTab('sov', ${bid.id})">Schedule of Values</button>
             <button class="filter-tab ${tab === 'documents' ? 'active' : ''}" onclick="switchBidTab('documents', ${bid.id})">Documents</button>
             <button class="filter-tab ${tab === 'intelligence' ? 'active' : ''}" onclick="switchBidTab('intelligence', ${bid.id})">Intelligence</button>
+            <button class="filter-tab ${tab === 'procurement' ? 'active' : ''}" onclick="switchBidTab('procurement', ${bid.id})">Procurement</button>
         </div>
 
         <div id="bidTabContent"></div>
@@ -3044,6 +3047,7 @@ async function renderBidDetail(bid) {
     else if (tab === 'sov') renderBidSOV(bid.id);
     else if (tab === 'documents') renderBidDocuments(bid);
     else if (tab === 'intelligence') renderBidIntelligence(bid);
+    else if (tab === 'procurement') renderBidProcurement(bid);
 }
 
 function renderSetupProgress(sp) {
@@ -5432,6 +5436,370 @@ function renderDomainFindings(findings) {
 // Keep legacy function name as alias for any external callers
 async function toggleSOVIntelligence(itemId, bidId) {
     return toggleSOVItemDetail(itemId, bidId);
+}
+
+// ══════════════════════════════════════════════════════════════
+// VENDOR DIRECTORY (Global)
+// ══════════════════════════════════════════════════════════════
+
+async function loadVendorDirectory() {
+    const content = document.getElementById('content');
+    document.getElementById('pageTitle').textContent = 'Vendor Directory';
+    document.getElementById('pageSubtitle').textContent = 'Subcontractors & Suppliers';
+    content.innerHTML = '<div class="empty-state"><p>Loading vendors...</p></div>';
+
+    try {
+        const includeArchived = state.vendorShowArchived || false;
+        const [vendors, trades] = await Promise.all([
+            api(`/vendors?include_archived=${includeArchived}`),
+            api('/vendors/trades'),
+        ]);
+
+        // Group by trade
+        const tradeMap = {};
+        vendors.forEach(v => {
+            if (!tradeMap[v.trade]) tradeMap[v.trade] = [];
+            tradeMap[v.trade].push(v);
+        });
+        const tradeNames = Object.keys(tradeMap).sort();
+
+        content.innerHTML = `
+            <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
+                <button class="btn btn-primary btn-sm" onclick="showAddVendor()">+ Add Vendor</button>
+                <label class="btn btn-sm" style="cursor:pointer;">
+                    Import Excel <input type="file" accept=".xlsx" style="display:none;" onchange="importVendorExcel(this.files[0])">
+                </label>
+                <button class="btn btn-sm" onclick="window.open('/api/vendors/export','_blank')">Export</button>
+                <div style="flex:1;"></div>
+                <input type="text" id="vendorSearch" class="search-input" placeholder="Search vendors..." style="width:220px;font-size:12px;" oninput="filterVendors(this.value)">
+                <select id="vendorTypeFilter" class="search-input" style="font-size:12px;" onchange="loadVendorDirectory()">
+                    <option value="">All Types</option>
+                    <option value="construction">Construction</option>
+                    <option value="materials">Materials</option>
+                </select>
+                <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+                    <input type="checkbox" ${includeArchived ? 'checked' : ''} onchange="state.vendorShowArchived=this.checked;loadVendorDirectory()"> Archived
+                </label>
+            </div>
+            <div id="vendorAddForm" style="display:none;"></div>
+            <div style="margin-bottom:8px;font-size:12px;color:var(--text-secondary);">
+                ${vendors.length} vendors across ${tradeNames.length} trades
+            </div>
+            <div id="vendorList">
+                ${tradeNames.length === 0 ? '<div class="empty-state"><p>No vendors yet. Import from Excel or add manually.</p></div>' :
+                tradeNames.map(trade => {
+                    const vds = tradeMap[trade];
+                    const tradeId = 'vtrade-' + trade.replace(/[^a-zA-Z0-9]/g, '_');
+                    return `
+                    <div class="vendor-trade-group" style="margin-bottom:4px;">
+                        <div onclick="document.getElementById('${tradeId}').style.display = document.getElementById('${tradeId}').style.display === 'none' ? 'block' : 'none'; this.querySelector('.vt-chevron').textContent = document.getElementById('${tradeId}').style.display === 'none' ? '▶' : '▼';"
+                             style="padding:8px 12px;background:var(--bg-hover);border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;gap:8px;">
+                            <span class="vt-chevron" style="font-size:10px;color:var(--text-tertiary);">&#9654;</span>
+                            <span style="font-size:13px;font-weight:600;color:var(--text-primary);">${escHtml(trade)}</span>
+                            <span style="font-size:11px;color:var(--text-tertiary);">(${vds.length})</span>
+                        </div>
+                        <div id="${tradeId}" style="display:none;padding-left:12px;">
+                            ${vds.map(v => `
+                            <div class="vendor-row" data-search="${escAttr((v.company + ' ' + (v.contact_name||'') + ' ' + (v.specialties||'') + ' ' + (v.trade||'')).toLowerCase())}" style="padding:6px 12px;margin:2px 0;border-bottom:1px solid var(--border-default);display:flex;align-items:center;gap:10px;font-size:12px;${!v.is_active ? 'opacity:0.5;' : ''}">
+                                <span style="font-weight:500;min-width:160px;">${escHtml(v.company)}</span>
+                                <span style="color:var(--text-secondary);min-width:120px;">${escHtml(v.contact_name || '—')}</span>
+                                <span style="color:var(--text-tertiary);min-width:100px;">${escHtml(v.city ? v.city + (v.state ? ', ' + v.state : '') : '—')}</span>
+                                <span style="color:var(--text-secondary);min-width:110px;">${escHtml(v.phone || '—')}</span>
+                                <span style="color:var(--text-tertiary);min-width:160px;overflow:hidden;text-overflow:ellipsis;">${v.email ? `<a href="mailto:${escAttr(v.email)}" style="color:var(--wollam-navy);">${escHtml(v.email)}</a>` : '—'}</span>
+                                ${v.is_dbe ? '<span class="badge" style="background:var(--wollam-gold);color:var(--wollam-black);font-size:9px;">DBE</span>' : ''}
+                                <span style="flex:1;color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(v.specialties || '')}</span>
+                            </div>`).join('')}
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>
+        `;
+    } catch (err) {
+        content.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function filterVendors(query) {
+    const q = query.toLowerCase().trim();
+    document.querySelectorAll('.vendor-row').forEach(row => {
+        row.style.display = !q || (row.getAttribute('data-search') || '').includes(q) ? '' : 'none';
+    });
+}
+
+function showAddVendor() {
+    const form = document.getElementById('vendorAddForm');
+    if (form.style.display === 'block') { form.style.display = 'none'; return; }
+    form.style.display = 'block';
+    form.innerHTML = `
+        <div class="card" style="padding:12px;margin-bottom:12px;">
+            <h4 style="font-size:13px;font-weight:600;margin:0 0 8px;">Add Vendor</h4>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+                <div><label style="font-size:11px;color:var(--text-secondary);">Trade *</label><input type="text" id="v_trade" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);">Company *</label><input type="text" id="v_company" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);">Contact</label><input type="text" id="v_contact" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);">Phone</label><input type="text" id="v_phone" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);">Email</label><input type="text" id="v_email" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);">Type</label><select id="v_type" class="search-input" style="width:100%;"><option value="construction">Construction</option><option value="materials">Materials</option></select></div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button class="btn btn-sm" onclick="document.getElementById('vendorAddForm').style.display='none'">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="addVendor()">Add</button>
+            </div>
+        </div>`;
+}
+
+async function addVendor() {
+    const trade = document.getElementById('v_trade').value.trim();
+    const company = document.getElementById('v_company').value.trim();
+    if (!trade || !company) { alert('Trade and Company are required'); return; }
+    try {
+        await api('/vendors', { method: 'POST', body: JSON.stringify({
+            trade, company,
+            contact_name: document.getElementById('v_contact').value.trim() || null,
+            phone: document.getElementById('v_phone').value.trim() || null,
+            email: document.getElementById('v_email').value.trim() || null,
+            vendor_type: document.getElementById('v_type').value,
+        })});
+        loadVendorDirectory();
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function importVendorExcel(file) {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const result = await fetch('/api/vendors/import', { method: 'POST', body: formData }).then(r => r.json());
+        alert(`Imported: ${result.created || 0} created, ${result.updated || 0} updated`);
+        loadVendorDirectory();
+    } catch (err) { alert('Import failed: ' + err.message); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// PROCUREMENT TAB (Per-Bid)
+// ══════════════════════════════════════════════════════════════
+
+async function renderBidProcurement(bid) {
+    const bidId = bid.id;
+    const tc = document.getElementById('bidTabContent');
+    tc.innerHTML = '<div class="empty-state"><p>Loading procurement...</p></div>';
+
+    try {
+        const [items, dashboard] = await Promise.all([
+            api(`/bidding/bids/${bidId}/procurement`),
+            api(`/bidding/bids/${bidId}/procurement/dashboard`),
+        ]);
+
+        const daysUntilDue = bid.bid_date ? Math.ceil((new Date(bid.bid_date) - new Date()) / 86400000) : null;
+
+        tc.innerHTML = `
+            <!-- Dashboard -->
+            <div class="kpi-grid" style="margin-bottom:16px;">
+                <div class="kpi-card card-animate"><div class="kpi-label">Total Items</div><div class="kpi-value">${dashboard.total_items}</div></div>
+                <div class="kpi-card card-animate"><div class="kpi-label">RFPs Sent</div><div class="kpi-value">${dashboard.rfps_sent}</div></div>
+                <div class="kpi-card card-animate"><div class="kpi-label">Quotes Received</div><div class="kpi-value">${dashboard.quotes_received}</div></div>
+                <div class="kpi-card card-animate"><div class="kpi-label">No Vendors</div><div class="kpi-value" style="color:${dashboard.no_vendors > 0 ? 'var(--danger-red)' : 'var(--success-green)'};">${dashboard.no_vendors}</div></div>
+            </div>
+
+            ${daysUntilDue !== null && daysUntilDue <= 14 && dashboard.no_vendors > 0 ? `
+            <div style="padding:8px 12px;margin-bottom:12px;background:#FFFBEB;border-left:3px solid #F59E0B;border-radius:var(--radius-sm);font-size:12px;color:#92400E;">
+                &#9888; Bid due in ${daysUntilDue} days. ${dashboard.no_vendors} procurement item(s) have no vendors assigned.
+            </div>` : ''}
+
+            <!-- Actions -->
+            <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+                <button class="btn btn-sm" onclick="showAddProcurement(${bidId})">+ Add Item</button>
+                <button class="btn btn-sm" onclick="analyzeGaps(${bidId})">Analyze Gaps</button>
+                <button class="btn btn-sm" onclick="window.open('/api/bidding/bids/${bidId}/procurement/export','_blank')">Export</button>
+                <button class="btn btn-sm" disabled title="Coming soon" style="opacity:0.5;">Generate RFP Package</button>
+            </div>
+            <div id="procAddForm" style="display:none;"></div>
+            <div id="gapAnalysisPanel" style="display:none;"></div>
+
+            <!-- Procurement Register -->
+            ${items.length === 0 ? '<div class="empty-state"><p>No procurement items yet. Add items manually or click "Analyze Gaps" for AI suggestions.</p></div>' : `
+            <div class="card" style="padding:0;overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead>
+                        <tr style="background:var(--bg-hover);border-bottom:2px solid var(--border-default);">
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);">Name</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);width:90px;">Type</th>
+                            <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);width:100px;">Trade</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);width:90px;">Status</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);width:70px;">Vendors</th>
+                            <th style="padding:8px 10px;text-align:center;font-weight:600;color:var(--text-secondary);width:50px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${items.map(item => {
+                            const statusColors = {not_started:'var(--text-tertiary)',rfp_sent:'var(--status-info)',quotes_received:'var(--success-green)',awarded:'var(--wollam-navy)',not_needed:'var(--text-disabled)'};
+                            const sc = statusColors[item.status] || 'var(--text-tertiary)';
+                            const solCount = (item.solicitations || []).length;
+                            return `
+                            <tr style="border-bottom:1px solid var(--border-default);cursor:pointer;" onclick="toggleProcDetail(${item.id}, ${bidId})">
+                                <td style="padding:6px 10px;font-weight:500;">
+                                    ${item.ai_suggested ? '<span title="AI suggested" style="color:var(--wollam-gold);">&#10024;</span> ' : ''}${escHtml(item.name)}
+                                    ${item.ai_source ? `<br><span style="font-size:10px;color:var(--text-tertiary);font-style:italic;">${escHtml(item.ai_source.substring(0, 80))}</span>` : ''}
+                                </td>
+                                <td style="padding:6px 10px;color:var(--text-secondary);">${escHtml(item.procurement_type.replace(/_/g, ' '))}</td>
+                                <td style="padding:6px 10px;color:var(--text-tertiary);">${escHtml(item.trade_match || '—')}</td>
+                                <td style="padding:6px 10px;text-align:center;"><span style="font-size:10px;font-weight:600;color:${sc};text-transform:uppercase;">${escHtml(item.status.replace(/_/g, ' '))}</span></td>
+                                <td style="padding:6px 10px;text-align:center;">${solCount} / 3</td>
+                                <td style="padding:6px 10px;text-align:center;" onclick="event.stopPropagation();">
+                                    <button onclick="deleteProcItem(${item.id}, ${bidId})" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:11px;">&times;</button>
+                                </td>
+                            </tr>
+                            <tr><td colspan="6" style="padding:0;">
+                                <div id="proc-detail-${item.id}" style="display:none;padding:12px 16px;background:var(--bg-hover);border-bottom:1px solid var(--border-default);">
+                                    ${renderProcDetail(item, bidId)}
+                                </div>
+                            </td></tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>`}
+        `;
+    } catch (err) {
+        tc.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escHtml(err.message)}</p></div>`;
+    }
+}
+
+function renderProcDetail(item, bidId) {
+    const sols = item.solicitations || [];
+    const links = item.sov_links || [];
+    return `
+        <div style="margin-bottom:8px;">
+            <span style="font-size:11px;font-weight:600;color:var(--text-secondary);">LINKED SOV ITEMS</span>
+            ${links.length === 0 ? '<span style="font-size:11px;color:var(--text-tertiary);margin-left:8px;">None</span>' :
+                links.map(l => `<span style="font-size:11px;padding:2px 6px;background:var(--bg-hover);border-radius:4px;margin:0 2px;">${escHtml(l.item_number || '')} ${escHtml(l.description || '')}</span>`).join('')}
+        </div>
+        <div style="margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                <span style="font-size:11px;font-weight:600;color:var(--text-secondary);">SOLICITATIONS</span>
+                <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;" onclick="event.stopPropagation();addSolicitation(${item.id}, ${bidId})">+ Vendor</button>
+            </div>
+            ${sols.length === 0 ? '<div style="font-size:11px;color:var(--text-tertiary);">No vendors contacted yet.</div>' : `
+            <table style="width:100%;border-collapse:collapse;font-size:11px;">
+                <tr style="background:var(--bg-surface);"><th style="padding:3px 6px;text-align:left;">Company</th><th style="padding:3px 6px;">Contact</th><th style="padding:3px 6px;">Status</th><th style="padding:3px 6px;">Quote</th></tr>
+                ${sols.map(s => `<tr style="border-bottom:1px solid var(--border-default);">
+                    <td style="padding:3px 6px;font-weight:500;">${escHtml(s.company_name || '—')}</td>
+                    <td style="padding:3px 6px;">${escHtml(s.contact_name || '—')}</td>
+                    <td style="padding:3px 6px;text-align:center;"><span style="font-size:10px;font-weight:600;text-transform:uppercase;">${escHtml(s.status)}</span></td>
+                    <td style="padding:3px 6px;">${s.quote_amount != null ? '$' + fmt(s.quote_amount) : '—'}</td>
+                </tr>`).join('')}
+            </table>`}
+        </div>`;
+}
+
+function toggleProcDetail(itemId, bidId) {
+    const el = document.getElementById(`proc-detail-${itemId}`);
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function showAddProcurement(bidId) {
+    const form = document.getElementById('procAddForm');
+    if (form.style.display === 'block') { form.style.display = 'none'; return; }
+    form.style.display = 'block';
+    form.innerHTML = `
+        <div class="card" style="padding:12px;margin-bottom:12px;">
+            <div style="display:grid;grid-template-columns:1fr 120px 120px;gap:8px;margin-bottom:8px;">
+                <div><label style="font-size:11px;color:var(--text-secondary);">Name *</label><input type="text" id="proc_name" class="search-input" style="width:100%;"></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);">Type</label><select id="proc_type" class="search-input" style="width:100%;"><option value="subcontract">Subcontract</option><option value="material">Material</option><option value="testing">Testing</option><option value="equipment_rental">Equipment</option><option value="specialty_service">Specialty</option></select></div>
+                <div><label style="font-size:11px;color:var(--text-secondary);">Trade</label><input type="text" id="proc_trade" class="search-input" style="width:100%;"></div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button class="btn btn-sm" onclick="document.getElementById('procAddForm').style.display='none'">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="createProcItem(${bidId})">Add</button>
+            </div>
+        </div>`;
+}
+
+async function createProcItem(bidId) {
+    const name = document.getElementById('proc_name').value.trim();
+    if (!name) { alert('Name is required'); return; }
+    try {
+        await api(`/bidding/bids/${bidId}/procurement`, { method: 'POST', body: JSON.stringify({
+            name,
+            procurement_type: document.getElementById('proc_type').value,
+            trade_match: document.getElementById('proc_trade').value.trim() || null,
+        })});
+        renderBidProcurement(window._currentBid);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function deleteProcItem(itemId, bidId) {
+    if (!confirm('Delete this procurement item?')) return;
+    try {
+        await api(`/bidding/procurement/${itemId}`, { method: 'DELETE' });
+        renderBidProcurement(window._currentBid);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function addSolicitation(itemId, bidId) {
+    const company = prompt('Company name:');
+    if (!company) return;
+    try {
+        await api(`/bidding/procurement/${itemId}/solicitations`, {
+            method: 'POST',
+            body: JSON.stringify({ company_name: company }),
+        });
+        renderBidProcurement(window._currentBid);
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function analyzeGaps(bidId) {
+    const panel = document.getElementById('gapAnalysisPanel');
+    panel.style.display = 'block';
+    panel.innerHTML = '<div class="card" style="padding:16px;margin-bottom:12px;"><p style="font-size:12px;color:var(--text-tertiary);">Analyzing procurement gaps...</p></div>';
+
+    try {
+        const result = await api(`/bidding/bids/${bidId}/procurement/analyze-gaps`, { method: 'POST' });
+        const suggestions = result.suggestions || [];
+
+        if (suggestions.length === 0) {
+            panel.innerHTML = '<div class="card" style="padding:16px;margin-bottom:12px;"><p style="font-size:12px;color:var(--success-green);">&#10003; No procurement gaps found. All subcontract SOV items have procurement links.</p></div>';
+            return;
+        }
+
+        panel.innerHTML = `
+            <div class="card" style="padding:16px;margin-bottom:12px;">
+                <h4 style="font-size:13px;font-weight:600;margin:0 0 8px;">${suggestions.length} Gap(s) Found — Review & Accept</h4>
+                ${suggestions.map(s => `
+                <div style="padding:8px 10px;margin-bottom:6px;border:1px solid var(--border-default);border-radius:var(--radius-sm);display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" checked data-suggestion='${escAttr(JSON.stringify(s))}' class="gap-checkbox">
+                    <div style="flex:1;">
+                        <div style="font-size:12px;font-weight:500;">${escHtml(s.name)}</div>
+                        <div style="font-size:10px;color:var(--text-tertiary);">${escHtml(s.procurement_type)} ${s.trade_match ? '· ' + escHtml(s.trade_match) : ''}</div>
+                        <div style="font-size:10px;color:var(--text-secondary);font-style:italic;">${escHtml(s.ai_source || '')}</div>
+                    </div>
+                </div>`).join('')}
+                <div style="display:flex;gap:8px;margin-top:8px;">
+                    <button class="btn btn-primary btn-sm" onclick="acceptGapSuggestions(${bidId})">Accept Selected</button>
+                    <button class="btn btn-sm" onclick="document.getElementById('gapAnalysisPanel').style.display='none'">Dismiss</button>
+                </div>
+            </div>`;
+    } catch (err) {
+        panel.innerHTML = `<div class="card" style="padding:16px;margin-bottom:12px;"><p style="font-size:12px;color:var(--danger-red);">Error: ${escHtml(err.message)}</p></div>`;
+    }
+}
+
+async function acceptGapSuggestions(bidId) {
+    const checkboxes = document.querySelectorAll('.gap-checkbox:checked');
+    const suggestions = [];
+    checkboxes.forEach(cb => {
+        try { suggestions.push(JSON.parse(cb.getAttribute('data-suggestion'))); } catch (e) {}
+    });
+    if (suggestions.length === 0) { alert('No suggestions selected'); return; }
+
+    try {
+        const result = await api(`/bidding/bids/${bidId}/procurement/accept-suggestions`, {
+            method: 'POST',
+            body: JSON.stringify({ suggestions }),
+        });
+        document.getElementById('gapAnalysisPanel').style.display = 'none';
+        alert(`Created ${result.created} procurement item(s)`);
+        renderBidProcurement(window._currentBid);
+    } catch (err) { alert('Error: ' + err.message); }
 }
 
 // ── Init ──

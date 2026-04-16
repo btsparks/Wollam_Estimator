@@ -373,6 +373,9 @@ async def delete_bid(bid_id: int):
                 logger.warning("Failed to delete vector collection for bid %d: %s", bid_id, e)
 
         # Delete children first (foreign key order)
+        conn.execute("DELETE FROM procurement_solicitation WHERE procurement_item_id IN (SELECT id FROM procurement_item WHERE bid_id = ?)", (bid_id,))
+        conn.execute("DELETE FROM procurement_sov_link WHERE procurement_item_id IN (SELECT id FROM procurement_item WHERE bid_id = ?)", (bid_id,))
+        conn.execute("DELETE FROM procurement_item WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM rfi_log WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM drawing_register WHERE bid_id = ?", (bid_id,))
         conn.execute("DELETE FROM spec_register WHERE bid_id = ?", (bid_id,))
