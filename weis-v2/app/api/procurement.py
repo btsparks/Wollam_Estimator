@@ -180,10 +180,35 @@ async def delete_procurement(item_id: int):
 
 @router.post("/bids/{bid_id}/procurement/analyze-gaps")
 async def analyze_gaps(bid_id: int):
-    """Run AI gap analysis, returns suggestions."""
+    """Run AI gap analysis, returns suggestions with scope context."""
     from app.services.procurement_analyzer import analyze_procurement_gaps
     suggestions = analyze_procurement_gaps(bid_id)
-    return {"suggestions": suggestions, "count": len(suggestions)}
+
+    # Add context about work_type designations for user guidance
+    conn = get_connection()
+    try:
+        counts = conn.execute(
+            """SELECT
+                SUM(CASE WHEN COALESCE(in_scope, 1) = 1 THEN 1 ELSE 0 END) as in_scope,
+                SUM(CASE WHEN COALESCE(in_scope, 1) = 1 AND work_type = 'subcontract' THEN 1 ELSE 0 END) as subcontract,
+                SUM(CASE WHEN COALESCE(in_scope, 1) = 1 AND work_type = 'self_perform' THEN 1 ELSE 0 END) as self_perform,
+                SUM(CASE WHEN COALESCE(in_scope, 1) = 1 AND (work_type IS NULL OR work_type = 'undecided') THEN 1 ELSE 0 END) as undecided
+               FROM bid_sov_item WHERE bid_id = ?""",
+            (bid_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    return {
+        "suggestions": suggestions,
+        "count": len(suggestions),
+        "scope_context": {
+            "in_scope": counts["in_scope"] or 0,
+            "subcontract": counts["subcontract"] or 0,
+            "self_perform": counts["self_perform"] or 0,
+            "undecided": counts["undecided"] or 0,
+        },
+    }
 
 
 @router.post("/bids/{bid_id}/procurement/accept-suggestions")

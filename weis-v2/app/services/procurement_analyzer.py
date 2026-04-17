@@ -1,5 +1,16 @@
-"""Procurement gap analyzer — cross-references SOV, agents, and vendor directory."""
+"""Procurement gap analyzer — cross-references SOV, agents, and vendor directory.
 
+The procurement register tracks external pricing needed for the bid. The gap
+analysis identifies SOV items that need procurement but don't have it yet.
+
+Key rules:
+- ONLY in-scope SOV items are visible (out-of-scope = invisible)
+- ONLY items with work_type='subcontract' generate procurement suggestions
+- Items with work_type='undecided' or 'self_perform' are excluded
+- Agent findings only produce suggestions when tied to a subcontract SOV item
+"""
+
+import json
 import logging
 from app.database import get_connection
 
@@ -7,29 +18,33 @@ logger = logging.getLogger(__name__)
 
 
 def analyze_procurement_gaps(bid_id: int) -> list[dict]:
-    """Cross-reference SOV items, agent findings, and vendor trades to find gaps.
+    """Cross-reference in-scope subcontract SOV items against existing procurement items.
 
-    Only analyzes in-scope SOV items. Out-of-scope items are invisible.
-    Returns suggestions (does NOT auto-create).
+    Returns suggestions for missing procurement items. Does NOT auto-create.
     """
     conn = get_connection()
     try:
-        # 1. Get in-scope subcontract SOV items
-        sub_items = conn.execute(
+        # 1. Get ALL in-scope SOV items (we need the full list for context)
+        all_in_scope = conn.execute(
             """SELECT s.id, s.item_number, s.description, s.work_type
                FROM bid_sov_item s
-               WHERE s.bid_id = ? AND COALESCE(s.in_scope, 1) = 1 AND s.work_type = 'subcontract'
+               WHERE s.bid_id = ? AND COALESCE(s.in_scope, 1) = 1
                ORDER BY s.sort_order""",
             (bid_id,),
         ).fetchall()
 
-        # 2. Get existing procurement items for this bid
+        # Only subcontract items need procurement
+        sub_items = [i for i in all_in_scope if i["work_type"] == "subcontract"]
+
+        # Count undecided for guidance message
+        undecided_count = sum(1 for i in all_in_scope if (i["work_type"] or "undecided") == "undecided")
+
+        # 2. Get existing procurement items and their SOV links
         existing = conn.execute(
             "SELECT id, name, trade_match FROM procurement_item WHERE bid_id = ?", (bid_id,)
         ).fetchall()
         existing_names = {e["name"].lower() for e in existing}
 
-        # 3. Get linked SOV items
         linked_sov_ids = set()
         for e in existing:
             links = conn.execute(
@@ -39,47 +54,16 @@ def analyze_procurement_gaps(bid_id: int) -> list[dict]:
             for lnk in links:
                 linked_sov_ids.add(lnk["sov_item_id"])
 
-        # 4. Get vendor trades for matching
+        # 3. Get vendor trades for matching
         trades = conn.execute(
             "SELECT DISTINCT trade FROM vendor_directory WHERE is_active = 1"
         ).fetchall()
         trade_names = [t["trade"].lower() for t in trades]
 
-        # 5. Get agent reports for additional suggestions
-        agent_findings = []
-        reports = conn.execute(
-            "SELECT agent_name, report_json FROM agent_reports WHERE bid_id = ? AND status = 'complete'",
-            (bid_id,),
-        ).fetchall()
-
-        import json
-        for r in reports:
-            try:
-                rj = json.loads(r["report_json"]) if isinstance(r["report_json"], str) else (r["report_json"] or {})
-            except (json.JSONDecodeError, TypeError):
-                continue
-
-            # QA/QC: testing requirements
-            for test in rj.get("testing_requirements", []):
-                agent_findings.append({
-                    "name": f"Testing: {test.get('test', 'Unknown')}",
-                    "type": "testing",
-                    "source": f"QA/QC Agent: {test.get('test', '')} per {test.get('spec_section', '')}",
-                })
-
-            # Subcontract: recommended scopes
-            for scope in rj.get("recommended_sub_scopes", []):
-                agent_findings.append({
-                    "name": f"{scope.get('discipline', 'Sub')} Subcontract",
-                    "type": "subcontract",
-                    "trade": scope.get("discipline"),
-                    "source": f"Subcontract Agent: {scope.get('scope_summary', '')}",
-                })
-
         suggestions = []
         suggestion_id = 0
 
-        # Suggest procurement items for unlinked subcontract SOV items
+        # 4. Suggest procurement items for UNLINKED SUBCONTRACT SOV items only
         for item in sub_items:
             if item["id"] not in linked_sov_ids:
                 desc = item["description"] or ""
@@ -99,24 +83,45 @@ def analyze_procurement_gaps(bid_id: int) -> list[dict]:
                         "name": name,
                         "procurement_type": "subcontract",
                         "trade_match": trade_match,
-                        "ai_source": f"SOV item '{desc}' designated as subcontract with no procurement link",
+                        "ai_source": f"SOV item '{item['item_number'] or ''}' ({desc[:60]}) — designated subcontract, no procurement link",
                         "related_sov_items": [item["id"]],
                     })
 
-        # Add agent-sourced suggestions not already covered
-        for af in agent_findings:
-            if af["name"].lower() not in existing_names:
-                # Dedup against already-suggested names
-                if not any(s["name"].lower() == af["name"].lower() for s in suggestions):
-                    suggestion_id += 1
-                    suggestions.append({
-                        "suggestion_id": suggestion_id,
-                        "name": af["name"],
-                        "procurement_type": af["type"],
-                        "trade_match": af.get("trade"),
-                        "ai_source": af["source"],
-                        "related_sov_items": [],
-                    })
+        # 5. Agent-sourced suggestions — ONLY if they relate to subcontract SOV items
+        #    We match agent findings against subcontract item descriptions to avoid
+        #    suggesting procurement for self-perform or undecided work.
+        if sub_items:
+            reports = conn.execute(
+                "SELECT agent_name, report_json FROM agent_reports WHERE bid_id = ? AND status = 'complete'",
+                (bid_id,),
+            ).fetchall()
+
+            sub_descriptions = {i["id"]: (i["description"] or "").lower() for i in sub_items}
+            sub_desc_text = " ".join(sub_descriptions.values())
+
+            for r in reports:
+                try:
+                    rj = json.loads(r["report_json"]) if isinstance(r["report_json"], str) else (r["report_json"] or {})
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                # QA/QC testing — only suggest if the test relates to a subcontract scope
+                for test in rj.get("testing_requirements", []):
+                    test_name = test.get("test", "")
+                    # Check if any subcontract SOV description mentions this test topic
+                    test_lower = test_name.lower()
+                    if any(kw in sub_desc_text for kw in test_lower.split()[:3] if len(kw) > 3):
+                        name = f"Testing: {test_name}"
+                        if name.lower() not in existing_names and not any(s["name"].lower() == name.lower() for s in suggestions):
+                            suggestion_id += 1
+                            suggestions.append({
+                                "suggestion_id": suggestion_id,
+                                "name": name,
+                                "procurement_type": "testing",
+                                "trade_match": None,
+                                "ai_source": f"QA/QC Agent: {test_name} per {test.get('spec_section', '')}",
+                                "related_sov_items": [],
+                            })
 
         return suggestions
     finally:
@@ -134,7 +139,6 @@ def suggest_vendors(procurement_item_id: int) -> list[dict]:
             return []
 
         trade = item["trade_match"]
-        # Search by exact match first, then fuzzy
         vendors = conn.execute(
             """SELECT * FROM vendor_directory
                WHERE is_active = 1 AND (trade = ? OR trade LIKE ? OR ? LIKE '%' || trade || '%')

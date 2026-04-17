@@ -5814,15 +5814,41 @@ async function analyzeGaps(bidId) {
     try {
         const result = await api(`/bidding/bids/${bidId}/procurement/analyze-gaps`, { method: 'POST' });
         const suggestions = result.suggestions || [];
+        const ctx = result.scope_context || {};
+
+        // Build guidance message about scope designations
+        let guidanceHtml = '';
+        if (ctx.undecided > 0 && ctx.subcontract === 0) {
+            guidanceHtml = `
+                <div style="padding:10px 12px;margin-bottom:12px;background:rgba(245,158,11,0.06);border-left:3px solid #F59E0B;border-radius:var(--radius-sm);font-size:12px;color:#92400E;">
+                    <strong>No items designated as subcontract.</strong> Gap analysis only looks at SOV items you've marked as "SUB" (subcontract).
+                    You have ${ctx.undecided} undecided item(s). Go to the SOV tab, click the Type column to set items as SP (self-perform) or SUB (subcontract), then re-run gap analysis.
+                </div>`;
+        } else if (ctx.undecided > 0) {
+            guidanceHtml = `
+                <div style="padding:8px 12px;margin-bottom:10px;background:var(--bg-hover);border-radius:var(--radius-sm);font-size:11px;color:var(--text-secondary);">
+                    Analyzing ${ctx.subcontract} subcontract item(s). ${ctx.undecided} item(s) still undecided — designate them as SP or SUB on the SOV tab for complete coverage.
+                </div>`;
+        } else {
+            guidanceHtml = `
+                <div style="padding:8px 12px;margin-bottom:10px;background:var(--bg-hover);border-radius:var(--radius-sm);font-size:11px;color:var(--text-secondary);">
+                    ${ctx.in_scope} in-scope items: ${ctx.subcontract} subcontract, ${ctx.self_perform} self-perform.
+                </div>`;
+        }
 
         if (suggestions.length === 0) {
-            panel.innerHTML = '<div class="card" style="padding:16px;margin-bottom:12px;"><p style="font-size:12px;color:var(--success-green);">&#10003; No procurement gaps found. All subcontract SOV items have procurement links.</p></div>';
+            panel.innerHTML = `<div class="card" style="padding:16px;margin-bottom:12px;">
+                ${guidanceHtml}
+                <p style="font-size:12px;color:var(--success-green);margin:0;">&#10003; ${ctx.subcontract > 0 ? 'No procurement gaps found. All subcontract SOV items have procurement links.' : 'No subcontract items to analyze. Designate items as SUB on the SOV tab first.'}</p>
+            </div>`;
             return;
         }
 
         panel.innerHTML = `
             <div class="card" style="padding:16px;margin-bottom:12px;">
+                ${guidanceHtml}
                 <h4 style="font-size:13px;font-weight:600;margin:0 0 8px;">${suggestions.length} Gap(s) Found — Review & Accept</h4>
+                <p style="font-size:11px;color:var(--text-secondary);margin:0 0 10px;">These are subcontract SOV items without procurement links. Check the ones you want to create procurement items for.</p>
                 ${suggestions.map(s => `
                 <div style="padding:8px 10px;margin-bottom:6px;border:1px solid var(--border-default);border-radius:var(--radius-sm);display:flex;align-items:center;gap:8px;">
                     <input type="checkbox" checked data-suggestion='${escAttr(JSON.stringify(s))}' class="gap-checkbox">

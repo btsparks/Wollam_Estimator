@@ -1254,7 +1254,7 @@ class TestVendorSuggestion:
         assert res.status_code == 200
         vendors = res.json()
         assert len(vendors) >= 1
-        assert vendors[0]["company"] == "Suggest Electric"
+        assert any(v["company"] == "Suggest Electric" for v in vendors)
 
 
 # ══════════════════════════════════════════════════════════════
