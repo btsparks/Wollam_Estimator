@@ -1340,14 +1340,17 @@ def send_message(conversation_id: int | None, message: str, bid_id: int | None =
         effective_system = SYSTEM_PROMPT
         vector_sources = []
         if bid_id:
+            # ALWAYS use bid-focused prompt when bid_id is provided.
+            # The bid chat is a closed system scoped to this bid's documents.
+            bid_context = ""
             from app.config import VECTOR_SEARCH_ENABLED
             if VECTOR_SEARCH_ENABLED:
                 bid_context, vector_sources = _build_vector_context(bid_id, message)
-                if bid_context:
-                    # Use the bid-focused system prompt instead of appending to the
-                    # historical-data-first prompt. This tells Claude to answer from
-                    # bid documents first and only use SQL for historical comparisons.
-                    effective_system = BID_SYSTEM_PROMPT + bid_context
+            effective_system = BID_SYSTEM_PROMPT
+            if bid_context:
+                effective_system += bid_context
+            else:
+                effective_system += "\n\n(No matching document excerpts found for this query. Answer based on any prior context in this conversation, or let the user know you need more specific terms to search the bid documents.)"
 
         # 4. Build Claude API messages
         api_messages = []
