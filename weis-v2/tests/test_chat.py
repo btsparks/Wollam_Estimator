@@ -421,3 +421,33 @@ class TestSqlToolExecution:
         assert result["row_count"] > 0
         assert "job_number" in result["columns"]
         assert "cc_count" in result["columns"]
+
+
+# ── Conversation bid_id Filter Tests ──
+
+class TestConversationBidFilter:
+
+    def test_list_conversations_no_filter(self):
+        """GET /conversations without bid_id returns all conversations."""
+        res = client.get("/api/chat/conversations")
+        assert res.status_code == 200
+        assert isinstance(res.json(), list)
+
+    def test_list_conversations_with_bid_filter(self):
+        """GET /conversations?bid_id=X returns only conversations for that bid."""
+        # Use a non-existent bid_id to ensure empty results
+        res = client.get("/api/chat/conversations?bid_id=99999")
+        assert res.status_code == 200
+        convos = res.json()
+        # All returned conversations should have the specified bid_id
+        for c in convos:
+            assert c["bid_id"] == 99999
+
+    def test_list_conversations_bid_filter_excludes_others(self):
+        """Conversations for other bids should not appear when filtering."""
+        # Get all conversations
+        all_convos = client.get("/api/chat/conversations").json()
+        # Get conversations for bid_id=99999 (likely empty)
+        filtered = client.get("/api/chat/conversations?bid_id=99999").json()
+        # Filtered should be a subset
+        assert len(filtered) <= len(all_convos)

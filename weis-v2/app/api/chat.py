@@ -4,7 +4,9 @@ Thin wrapper over the chat service. All business logic lives
 in app/services/chat.py.
 """
 
-from fastapi import APIRouter, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.chat import (
@@ -52,10 +54,10 @@ def chat_send(req: SendMessageRequest):
 
 
 @router.get("/conversations")
-def chat_list_conversations():
-    """Return all conversations, most recent first."""
+def chat_list_conversations(bid_id: Optional[int] = Query(None)):
+    """Return conversations, most recent first. Filter by bid_id if provided."""
     try:
-        return list_conversations()
+        return list_conversations(bid_id=bid_id)
     except Exception as e:
         raise HTTPException(
             status_code=500,

@@ -1879,7 +1879,7 @@ async function chatSend() {
             sources: result.sources || [],
         });
 
-        // Update conversation list
+        // Update conversation list (main chat shows all conversations)
         const convos = await api('/chat/conversations').catch(() => []);
         state.chatConversations = convos;
         renderChatConvList();
@@ -2546,6 +2546,46 @@ function bidDueCountdown(bidDate) {
     return `<span style="color:var(--text-secondary);">Due in ${diff}d</span>`;
 }
 
+// ── Universal Document Citation Utilities ──
+
+// Cache of bid documents for link resolution (populated on demand)
+window._bidDocCache = {};
+
+async function loadBidDocCache(bidId) {
+    if (window._bidDocCache[bidId]) return window._bidDocCache[bidId];
+    try {
+        const docs = await api(`/bidding/bids/${bidId}/documents`);
+        window._bidDocCache[bidId] = docs;
+        return docs;
+    } catch { return []; }
+}
+
+function resolveDocumentLink(bidId, reference) {
+    const docs = window._bidDocCache[bidId] || [];
+    if (!reference || docs.length === 0) return null;
+    const ref = reference.toLowerCase().trim();
+
+    // Try exact filename match
+    let match = docs.find(d => d.filename && d.filename.toLowerCase() === ref);
+    // Try partial filename match
+    if (!match) match = docs.find(d => d.filename && d.filename.toLowerCase().includes(ref));
+    // Try matching reference against filename
+    if (!match) match = docs.find(d => d.filename && ref.includes(d.filename.toLowerCase()));
+
+    if (match) {
+        const fp = match.file_path || match.dropbox_path;
+        if (fp) return 'file:///' + fp.replace(/\\/g, '/').replace(/ /g, '%20');
+    }
+    return null;
+}
+
+function renderDocCitation(text, url) {
+    if (url) {
+        return `<a href="${escAttr(url)}" target="_blank" style="color:var(--wollam-navy);text-decoration:none;font-size:12px;" title="Open file">&#128196; ${escHtml(text)}</a>`;
+    }
+    return `<span style="font-size:12px;color:var(--text-secondary);">&#128196; ${escHtml(text)}</span>`;
+}
+
 function docCategoryBadge(cat) {
     const colors = {
         spec: '--status-info', drawing: '--wollam-navy-light', contract: '--status-danger',
@@ -3152,76 +3192,252 @@ async function showCostDetail(bidId) {
 
 // ── Overview Tab ──
 
-function renderBidOverview(bid) {
+async function renderBidOverview(bid) {
     const tc = document.getElementById('bidTabContent');
-    tc.innerHTML = `
-        <div class="card" style="padding:20px;">
-            <h3 style="font-size:15px;font-weight:600;margin:0 0 16px;">Bid Information</h3>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Name</label>
-                    <input type="text" id="be_name" class="search-input" style="width:100%;" value="${escAttr(bid.bid_name || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Number</label>
-                    <input type="text" id="be_number" class="search-input" style="width:100%;" value="${escAttr(bid.bid_number || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Owner</label>
-                    <input type="text" id="be_owner" class="search-input" style="width:100%;" value="${escAttr(bid.owner || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">General Contractor</label>
-                    <input type="text" id="be_gc" class="search-input" style="width:100%;" value="${escAttr(bid.general_contractor || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Due Date</label>
-                    <input type="date" id="be_date" class="search-input" style="width:100%;" value="${escAttr(bid.bid_date || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Bid Due Time</label>
-                    <input type="time" id="be_time" class="search-input" style="width:100%;" value="${escAttr(bid.bid_due_time || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Location</label>
-                    <input type="text" id="be_location" class="search-input" style="width:100%;" value="${escAttr(bid.location || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Project Type</label>
-                    <input type="text" id="be_type" class="search-input" style="width:100%;" value="${escAttr(bid.project_type || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Contact Name</label>
-                    <input type="text" id="be_contact" class="search-input" style="width:100%;" value="${escAttr(bid.contact_name || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Contact Email</label>
-                    <input type="email" id="be_email" class="search-input" style="width:100%;" value="${escAttr(bid.contact_email || '')}"></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Status</label>
-                    <select id="be_status" class="search-input" style="width:100%;">
-                        <option value="active" ${bid.status === 'active' ? 'selected' : ''}>Active</option>
-                        <option value="submitted" ${bid.status === 'submitted' ? 'selected' : ''}>Submitted</option>
-                        <option value="no-bid" ${bid.status === 'no-bid' ? 'selected' : ''}>No-Bid</option>
-                        <option value="awarded" ${bid.status === 'awarded' ? 'selected' : ''}>Awarded</option>
-                    </select></div>
-                <div><label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Estimated Value</label>
-                    <input type="number" id="be_value" class="search-input" style="width:100%;" value="${bid.estimated_value || ''}"></div>
-            </div>
-            <div style="margin-top:12px;">
-                <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Description</label>
-                <textarea id="be_desc" class="search-input" rows="3" style="width:100%;resize:vertical;">${escHtml(bid.description || '')}</textarea>
-            </div>
-            <div style="margin-top:12px;">
-                <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Notes</label>
-                <textarea id="be_notes" class="search-input" rows="2" style="width:100%;resize:vertical;">${escHtml(bid.notes || '')}</textarea>
-            </div>
+    const summary = [bid.bid_name, bid.owner ? `Owner: ${bid.owner}` : '', bid.bid_date ? `Due: ${bid.bid_date}${bid.bid_due_time ? ' ' + bid.bid_due_time : ''}` : '', bidStatusBadge(bid.status)].filter(Boolean).join(' | ');
 
-            <!-- Dropbox Folder Link -->
-            <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border-default);">
-                <label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:8px;">Dropbox Estimating Folder</label>
-                ${bid.dropbox_folder_path
-                    ? `<div style="display:flex;align-items:center;gap:8px;">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success-green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                        <span style="font-size:13px;color:var(--text-primary);" title="${escAttr(bid.dropbox_folder_path)}">${escHtml(bid.dropbox_folder_path.split('\\\\').slice(-2).join('/'))}</span>
-                        <span style="font-size:11px;color:var(--text-tertiary);">${bid.sync_status === 'complete' ? 'Linked' : bid.sync_status || 'never'}</span>
-                    </div>`
-                    : `<div id="linkFolderContainer">
-                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    // Load bid conversations
+    const convos = await api(`/chat/conversations?bid_id=${bid.id}`).catch(() => []);
+    state.chatConversations = convos;
+    state.chatBidId = bid.id;
+
+    tc.innerHTML = `
+        <!-- Zone 1: Collapsible Bid Details -->
+        <div class="card" style="margin-bottom:16px;overflow:hidden;">
+            <div onclick="document.getElementById('bidDetailsExpanded').style.display = document.getElementById('bidDetailsExpanded').style.display === 'none' ? 'block' : 'none'; this.querySelector('.bd-chevron').textContent = document.getElementById('bidDetailsExpanded').style.display === 'none' ? '▶' : '▼';"
+                 style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;">
+                <span class="bd-chevron" style="font-size:10px;color:var(--text-tertiary);">&#9654;</span>
+                <span style="font-size:13px;font-weight:600;color:var(--text-primary);">Bid Details</span>
+                <span style="font-size:12px;color:var(--text-secondary);margin-left:8px;">${escHtml(summary)}</span>
+            </div>
+            <div id="bidDetailsExpanded" style="display:none;padding:0 16px 16px;border-top:1px solid var(--border-default);">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Bid Name</label>
+                        <input type="text" id="be_name" class="search-input" style="width:100%;" value="${escAttr(bid.bid_name || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Bid Number</label>
+                        <input type="text" id="be_number" class="search-input" style="width:100%;" value="${escAttr(bid.bid_number || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Owner</label>
+                        <input type="text" id="be_owner" class="search-input" style="width:100%;" value="${escAttr(bid.owner || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">General Contractor</label>
+                        <input type="text" id="be_gc" class="search-input" style="width:100%;" value="${escAttr(bid.general_contractor || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Due Date</label>
+                        <input type="date" id="be_date" class="search-input" style="width:100%;" value="${escAttr(bid.bid_date || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Due Time</label>
+                        <input type="time" id="be_time" class="search-input" style="width:100%;" value="${escAttr(bid.bid_due_time || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Location</label>
+                        <input type="text" id="be_location" class="search-input" style="width:100%;" value="${escAttr(bid.location || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Project Type</label>
+                        <input type="text" id="be_type" class="search-input" style="width:100%;" value="${escAttr(bid.project_type || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Contact</label>
+                        <input type="text" id="be_contact" class="search-input" style="width:100%;" value="${escAttr(bid.contact_name || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Email</label>
+                        <input type="email" id="be_email" class="search-input" style="width:100%;" value="${escAttr(bid.contact_email || '')}"></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Status</label>
+                        <select id="be_status" class="search-input" style="width:100%;">
+                            <option value="active" ${bid.status === 'active' ? 'selected' : ''}>Active</option>
+                            <option value="submitted" ${bid.status === 'submitted' ? 'selected' : ''}>Submitted</option>
+                            <option value="no-bid" ${bid.status === 'no-bid' ? 'selected' : ''}>No-Bid</option>
+                            <option value="awarded" ${bid.status === 'awarded' ? 'selected' : ''}>Awarded</option>
+                        </select></div>
+                    <div><label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Est. Value</label>
+                        <input type="number" id="be_value" class="search-input" style="width:100%;" value="${bid.estimated_value || ''}"></div>
+                </div>
+                <div style="margin-top:8px;">
+                    <label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Description</label>
+                    <textarea id="be_desc" class="search-input" rows="2" style="width:100%;resize:vertical;">${escHtml(bid.description || '')}</textarea>
+                </div>
+                <div style="margin-top:8px;">
+                    <label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:2px;">Notes</label>
+                    <textarea id="be_notes" class="search-input" rows="2" style="width:100%;resize:vertical;">${escHtml(bid.notes || '')}</textarea>
+                </div>
+                <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-default);">
+                    <label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px;">Dropbox Folder</label>
+                    ${bid.dropbox_folder_path
+                        ? `<div style="display:flex;align-items:center;gap:8px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success-green)" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                            <span style="font-size:12px;color:var(--text-primary);" title="${escAttr(bid.dropbox_folder_path)}">${escHtml(bid.dropbox_folder_path.split('\\\\').slice(-2).join('/'))}</span>
+                        </div>`
+                        : `<div style="display:flex;align-items:center;gap:8px;">
                             <button class="btn btn-sm" onclick="linkBidFolder(${bid.id})">Browse Folders</button>
                             <span style="font-size:11px;color:var(--text-tertiary);">or</span>
-                            <input type="text" id="detail_folder_path" class="search-input" style="flex:1;min-width:200px;font-size:12px;" placeholder="Paste folder path" onchange="linkBidFolderByPath(${bid.id}, this.value)">
-                        </div>
-                    </div>`
-                }
+                            <input type="text" id="detail_folder_path" class="search-input" style="flex:1;min-width:200px;font-size:11px;" placeholder="Paste folder path" onchange="linkBidFolderByPath(${bid.id}, this.value)">
+                        </div>`
+                    }
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+                    <button class="btn btn-sm" style="color:var(--danger-red);" onclick="deleteBid(${bid.id})">Delete Bid</button>
+                    <button class="btn btn-primary btn-sm" onclick="saveBidOverview(${bid.id})">Save Changes</button>
+                </div>
             </div>
+        </div>
 
-            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
-                <button class="btn btn-sm" style="color:var(--danger-red);" onclick="deleteBid(${bid.id})">Delete Bid</button>
-                <button class="btn btn-primary btn-sm" onclick="saveBidOverview(${bid.id})">Save Changes</button>
+        <!-- Zone 2: Bid-Scoped AI Chat -->
+        <div style="display:flex;gap:0;border:1px solid var(--border-default);border-radius:var(--radius-md);overflow:hidden;height:calc(100vh - 380px);min-height:400px;">
+            <!-- Conversation Sidebar -->
+            <div style="width:260px;border-right:1px solid var(--border-default);background:var(--bg-surface);display:flex;flex-direction:column;">
+                <div style="padding:12px;">
+                    <button class="btn btn-primary btn-sm" style="width:100%;" onclick="bidChatNewConversation(${bid.id})">+ New Chat</button>
+                </div>
+                <div id="bidChatConvList" style="flex:1;overflow-y:auto;padding:0 8px 8px;"></div>
+            </div>
+            <!-- Chat Area -->
+            <div style="flex:1;display:flex;flex-direction:column;background:var(--bg-base);">
+                <div id="bidChatMessages" style="flex:1;overflow-y:auto;padding:16px;"></div>
+                <div style="padding:12px 16px;border-top:1px solid var(--border-default);background:var(--bg-surface);">
+                    <div style="display:flex;gap:8px;align-items:flex-end;">
+                        <textarea id="bidChatInput" class="search-input" rows="1" style="flex:1;resize:none;font-size:13px;padding:8px 12px;min-height:38px;max-height:120px;" placeholder="Ask about documents, specs, quantities, requirements..." onkeydown="bidChatInputKeydown(event, ${bid.id})" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px';"></textarea>
+                        <button class="btn btn-primary btn-sm" style="height:38px;padding:0 16px;" onclick="bidChatSend(${bid.id})">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     `;
+
+    // Render conversation list and welcome
+    renderBidChatConvList(bid.id);
+    renderBidChatMessages(bid.id);
+}
+
+// ── Bid-Scoped Chat Functions ──
+
+function renderBidChatConvList(bidId) {
+    const el = document.getElementById('bidChatConvList');
+    if (!el) return;
+    const convos = state.chatConversations || [];
+    if (convos.length === 0) {
+        el.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text-tertiary);text-align:center;">Start a conversation to get insights from your bid documents</div>';
+        return;
+    }
+    el.innerHTML = convos.map(c => {
+        const active = c.id === state.chatConversationId ? 'background:var(--bg-selected);border-left:3px solid var(--wollam-navy);' : 'border-left:3px solid transparent;';
+        const date = new Date(c.updated_at || c.created_at);
+        const now = new Date();
+        const diff = now - date;
+        const dateStr = diff < 3600000 ? Math.round(diff / 60000) + 'm ago' : diff < 86400000 ? Math.round(diff / 3600000) + 'h ago' : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return `
+            <div onclick="bidChatLoadConversation(${c.id}, ${bidId})" style="padding:8px 10px;margin-bottom:2px;border-radius:var(--radius-sm);cursor:pointer;${active}">
+                <div style="font-size:12px;font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.title || 'New Conversation')}</div>
+                <div style="font-size:10px;color:var(--text-tertiary);">${dateStr} &middot; ${c.message_count || 0} msgs</div>
+            </div>`;
+    }).join('');
+}
+
+function renderBidChatMessages(bidId) {
+    const el = document.getElementById('bidChatMessages');
+    if (!el) return;
+    if (state.chatMessages.length === 0) {
+        el.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:20px;">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--wollam-navy)" stroke-width="1.5" style="margin-bottom:12px;opacity:0.5;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <p style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 4px;">Ask about this bid</p>
+                <p style="font-size:12px;color:var(--text-secondary);margin:0 0 16px;max-width:400px;">I have access to all documents, specs, drawings, agent analysis, and RFIs for this project.</p>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:500px;">
+                    <button class="btn btn-sm" style="font-size:11px;" onclick="document.getElementById('bidChatInput').value='What are the liquidated damages?';bidChatSend(${bidId})">LDs?</button>
+                    <button class="btn btn-sm" style="font-size:11px;" onclick="document.getElementById('bidChatInput').value='Summarize bonding and insurance requirements';bidChatSend(${bidId})">Bonding & Insurance</button>
+                    <button class="btn btn-sm" style="font-size:11px;" onclick="document.getElementById('bidChatInput').value='What compaction testing is required?';bidChatSend(${bidId})">Testing Requirements</button>
+                    <button class="btn btn-sm" style="font-size:11px;" onclick="document.getElementById('bidChatInput').value='What subcontractor scopes should we plan for?';bidChatSend(${bidId})">Sub Scopes</button>
+                </div>
+            </div>`;
+        return;
+    }
+    // Reuse the same message rendering logic as the main chat
+    el.innerHTML = state.chatMessages.map(m => {
+        if (m.role === 'user') {
+            return `<div class="chat-msg chat-msg-user"><div class="chat-msg-bubble chat-msg-user-bubble">${escHtml(m.content)}</div></div>`;
+        }
+        const html = renderMarkdown(m.content);
+        const sources = m.sources || [];
+        let sourcesHtml = '';
+        if (sources.length > 0) {
+            sourcesHtml = `<div class="chat-sources">
+                <div class="chat-sources-label" onclick="this.parentElement.classList.toggle('expanded')">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    Sources (${sources.length})
+                </div>
+                <div class="chat-sources-list">
+                    ${sources.map(s => {
+                        if (s.source_type === 'document') {
+                            const fileUrl = s.file_path ? 'file:///' + s.file_path.replace(/\\\\/g, '/').replace(/ /g, '%20') : null;
+                            const linkTag = fileUrl ? `<a href="${escAttr(fileUrl)}" target="_blank" style="color:inherit;text-decoration:none;" title="Open in Dropbox">` : '<span>';
+                            const closeTag = fileUrl ? '</a>' : '</span>';
+                            return `<span class="chat-source-badge badge-document">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                ${linkTag}${escHtml(s.filename || 'Document')}${s.section ? ' &middot; ' + escHtml(s.section) : ''}${closeTag}
+                            </span>`;
+                        }
+                        if (s.source_type === 'estimate') {
+                            return `<span class="chat-source-badge badge-estimate">&#9670; ${escHtml(s.job_number)} &middot; ESTIMATE</span>`;
+                        }
+                        return `<span class="chat-source-badge badge-${(s.confidence || 'none').toLowerCase()}">${escHtml(s.job_number)} &middot; ${escHtml(s.cost_code)} &middot; ${(s.confidence || 'N/A').toUpperCase()}</span>`;
+                    }).join('')}
+                </div>
+            </div>`;
+        }
+        return `<div class="chat-msg chat-msg-ai"><div class="chat-msg-bubble chat-msg-ai-bubble">${html}${sourcesHtml}</div></div>`;
+    }).join('');
+
+    if (state.chatLoading) {
+        el.innerHTML += `<div class="chat-msg chat-msg-ai"><div class="chat-msg-bubble chat-msg-ai-bubble"><div class="chat-loading"><div class="chat-loading-dot"></div><div class="chat-loading-dot"></div><div class="chat-loading-dot"></div></div></div></div>`;
+    }
+    el.scrollTop = el.scrollHeight;
+}
+
+async function bidChatSend(bidId) {
+    const input = document.getElementById('bidChatInput');
+    const message = input?.value?.trim();
+    if (!message || state.chatLoading) return;
+    input.value = '';
+    input.style.height = 'auto';
+
+    state.chatMessages.push({ role: 'user', content: message });
+    state.chatLoading = true;
+    renderBidChatMessages(bidId);
+
+    try {
+        const result = await api('/chat/send', {
+            method: 'POST',
+            body: JSON.stringify({
+                conversation_id: state.chatConversationId,
+                message: message,
+                bid_id: bidId,
+            }),
+        });
+        state.chatConversationId = result.conversation_id;
+        state.chatMessages.push({ role: 'assistant', content: result.response, sources: result.sources || [] });
+
+        // Refresh conversation list
+        state.chatConversations = await api(`/chat/conversations?bid_id=${bidId}`).catch(() => []);
+        renderBidChatConvList(bidId);
+    } catch (err) {
+        state.chatMessages.push({ role: 'assistant', content: `**Error:** ${err.message}`, sources: [] });
+    } finally {
+        state.chatLoading = false;
+        renderBidChatMessages(bidId);
+    }
+}
+
+function bidChatInputKeydown(e, bidId) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); bidChatSend(bidId); }
+}
+
+async function bidChatLoadConversation(convId, bidId) {
+    state.chatConversationId = convId;
+    try {
+        const conv = await api(`/chat/conversations/${convId}`);
+        state.chatMessages = (conv.messages || []).map(m => ({ role: m.role, content: m.content, sources: m.sources || [] }));
+    } catch { state.chatMessages = []; }
+    renderBidChatMessages(bidId);
+    renderBidChatConvList(bidId);
+}
+
+function bidChatNewConversation(bidId) {
+    state.chatConversationId = null;
+    state.chatMessages = [];
+    renderBidChatMessages(bidId);
+    renderBidChatConvList(bidId);
+    document.getElementById('bidChatInput')?.focus();
 }
 
 function escAttr(s) {

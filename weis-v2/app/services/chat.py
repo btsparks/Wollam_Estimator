@@ -1123,7 +1123,7 @@ HARD RULES — NEVER BREAK THESE:
 
 RESPONSE FORMAT:
 - Lead with a direct answer sourced from the bid documents
-- Cite the document: [Filename | Section] for every claim
+- Cite EVERY claim with the format: [Filename | Section] — always use this exact bracket format so citations can be linked to source documents
 - Use a markdown table when showing multiple items
 - Keep it concise — the estimator will ask follow-ups if they want more
 
@@ -1234,12 +1234,23 @@ def _build_vector_context(bid_id: int, message: str) -> tuple[str, list[dict]]:
                 source_key = (r.get("filename", ""), r.get("section_heading", ""))
                 if source_key not in seen_files:
                     seen_files.add(source_key)
+                    # Look up file_path from bid_documents for clickable links
+                    doc_file_path = None
+                    fname = r.get("filename", "")
+                    if fname:
+                        doc_row = conn.execute(
+                            "SELECT file_path, dropbox_path FROM bid_documents WHERE bid_id = ? AND filename = ? LIMIT 1",
+                            (bid_id, fname),
+                        ).fetchone()
+                        if doc_row:
+                            doc_file_path = doc_row["file_path"] or doc_row["dropbox_path"]
                     vector_sources.append({
                         "source_type": "document",
-                        "filename": r.get("filename", "Unknown"),
+                        "filename": fname or "Unknown",
                         "section": r.get("section_heading", ""),
                         "doc_category": r.get("doc_category", ""),
                         "distance": r.get("distance"),
+                        "file_path": doc_file_path,
                     })
             context_parts.append("\n".join(lines))
 
@@ -1587,23 +1598,34 @@ def _has_foreman_notes(job_id: int, cost_code: str) -> bool:
 # Conversation CRUD
 # ─────────────────────────────────────────────────────────────
 
-def list_conversations() -> list[dict]:
-    """List all conversations, most recent first, with message count."""
+def list_conversations(bid_id: int | None = None) -> list[dict]:
+    """List conversations, most recent first, with message count.
+
+    If bid_id is provided, only returns conversations for that bid.
+    """
     conn = get_connection()
     try:
-        rows = conn.execute("""
-            SELECT
-                c.id,
-                c.title,
-                c.bid_id,
-                c.created_at,
-                c.updated_at,
-                COUNT(m.id) as message_count
-            FROM chat_conversations c
-            LEFT JOIN chat_messages m ON m.conversation_id = c.id
-            GROUP BY c.id
-            ORDER BY c.updated_at DESC
-        """).fetchall()
+        if bid_id is not None:
+            rows = conn.execute("""
+                SELECT
+                    c.id, c.title, c.bid_id, c.created_at, c.updated_at,
+                    COUNT(m.id) as message_count
+                FROM chat_conversations c
+                LEFT JOIN chat_messages m ON m.conversation_id = c.id
+                WHERE c.bid_id = ?
+                GROUP BY c.id
+                ORDER BY c.updated_at DESC
+            """, (bid_id,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT
+                    c.id, c.title, c.bid_id, c.created_at, c.updated_at,
+                    COUNT(m.id) as message_count
+                FROM chat_conversations c
+                LEFT JOIN chat_messages m ON m.conversation_id = c.id
+                GROUP BY c.id
+                ORDER BY c.updated_at DESC
+            """).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
