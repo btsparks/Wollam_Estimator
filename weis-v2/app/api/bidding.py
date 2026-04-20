@@ -1583,7 +1583,10 @@ async def list_drawing_register(bid_id: int):
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM drawing_register WHERE bid_id = ? ORDER BY discipline ASC, drawing_number ASC",
+            """SELECT dr.*, bd.filename AS source_filename, bd.file_path AS source_file_path, bd.dropbox_path AS source_dropbox_path
+               FROM drawing_register dr
+               LEFT JOIN bid_documents bd ON dr.document_id = bd.id
+               WHERE dr.bid_id = ? ORDER BY dr.discipline ASC, dr.drawing_number ASC""",
             (bid_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1682,7 +1685,10 @@ async def list_spec_register(bid_id: int):
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM spec_register WHERE bid_id = ? ORDER BY division ASC, spec_section ASC",
+            """SELECT sr.*, bd.filename AS source_filename, bd.file_path AS source_file_path, bd.dropbox_path AS source_dropbox_path
+               FROM spec_register sr
+               LEFT JOIN bid_documents bd ON sr.document_id = bd.id
+               WHERE sr.bid_id = ? ORDER BY sr.division ASC, sr.spec_section ASC""",
             (bid_id,),
         ).fetchall()
         return [dict(r) for r in rows]

@@ -24,11 +24,41 @@ from app.services.sql_tool import (
     TOOL_DEFINITION,
     execute_sql,
 )
+from app.services.chat_tools import get_tools_for_context, get_tool_by_name, get_anthropic_definitions
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-haiku-4-5-20251001"
-MAX_TOOL_CALLS = 5  # Cap tool-use iterations per message
+# ─── Model Routing ───
+MODEL_HAIKU = "claude-haiku-4-5-20251001"
+MODEL_SONNET = "claude-sonnet-4-6"
+MODEL_OPUS = "claude-opus-4-6"
+
+MAX_TOOL_CALLS_BID = 20
+MAX_TOOL_CALLS_HISTORICAL = 8
+MAX_TOOL_CALLS = 5  # Legacy fallback
+
+COMPLEXITY_PATTERNS = [
+    r"\b\d{5}-[A-Z]\d{3}\b",        # drawing number pattern: 00532-G003
+    r"\baddend(?:um|a)\b",
+    r"\bsupersed",
+    r"\bcross-?reference",
+    r"\bwhat governs\b",
+    r"\bwhich document\b",
+    r"\bcompare (?:the|these)\b",
+]
+
+
+def _select_model(message: str, bid_id: int | None, deep_mode: bool = False) -> str:
+    """Route to the appropriate model based on context and complexity.
+
+    Model routing is ready for Sonnet/Opus but defaults to Haiku
+    for cost control. Set deep_mode=True to use Opus.
+    """
+    if deep_mode:
+        return MODEL_OPUS
+    # Default to Haiku for cost control — switch to MODEL_SONNET for bid_id
+    # when ready to spend more per query (~10-20x Haiku cost)
+    return MODEL_HAIKU
 
 # ─────────────────────────────────────────────────────────────
 # Signal Dictionaries — keyword detection for intent parsing
@@ -1064,10 +1094,12 @@ HARD RULES — NEVER BREAK THESE:
 - ONLY use numbers from your SQL query results. No extrapolation. No inventing numbers.
 - NEVER add % adjustments, contingencies, scaling factors, or risk buffers.
 - NEVER generate dollar totals or MH budgets by multiplying user quantities by rates.
-- NEVER provide unsolicited recommendations, next steps, or guidance.
-- NEVER include sections titled "Recommendations," "Scaling," "Next Steps," "Risk," or "Guidance."
 - If data doesn't exist, say so in one sentence. Stop there.
 - The estimator decides risk, assumptions, and adjustments — not you.
+
+HELPFUL FOLLOW-UPS:
+- When the user asks a historical question, offer relevant follow-ups they might want (similar jobs to compare, confidence caveats, PM context worth reading).
+- Do not invent rates or scaling — but do offer to look up additional data when it would help.
 
 RESPONSE FORMAT:
 - Lead with a brief answer, then show supporting data
@@ -1079,53 +1111,37 @@ RESPONSE FORMAT:
 """ + SCHEMA_DESCRIPTION
 
 
-# System prompt used when an active bid is selected and document context is available.
-# This completely replaces SYSTEM_PROMPT — it puts bid documents first and makes SQL secondary.
-BID_SYSTEM_PROMPT = """You are WEIS — Wollam Construction's estimating intelligence tool. The user is currently reviewing bid documents for an ACTIVE project they are pricing.
+# ─── Agentic Bid System Prompt ───
+BID_SYSTEM_PROMPT = """You are WEIS — Wollam Construction's estimating intelligence tool. The user is a senior estimator reviewing bid documents for a project they are pricing. You are their most senior colleague on the team — the person who catches what everyone else misses.
 
-YOU HAVE BEEN PROVIDED BID DOCUMENT EXCERPTS BELOW. These are the primary source of truth for this conversation.
+You have agentic access to this bid's documents through tools. You can list documents, read their full text, view drawings visually, search semantically, and check for addendum changes. Use these tools aggressively. Never answer from memory or guess when a tool call would give you the truth.
 
-HOW TO ANSWER:
-1. ANSWER FROM THE BID DOCUMENT EXCERPTS FIRST. Read them carefully. Quote specific language when relevant.
-2. Cite every answer with the document filename and section heading so the user can find it in the original.
-3. If the excerpts contain the answer, DO NOT run SQL queries — just answer directly from the documents.
-4. ONLY use the run_sql tool when:
-   - The user explicitly asks about historical data, past projects, or comparisons to other jobs
-   - The user asks about production rates, crew sizes, or costs from completed work
-   - The bid documents don't contain enough information and historical context would help
-   - The user says "historically," "on past projects," "compare to actuals," etc.
-5. If the excerpts don't fully answer the question, say what you found and what's missing. Offer to search historical data.
+HOW TO APPROACH A QUESTION:
+1. Start broad if needed: call list_bid_documents or search_bid_documents to understand what's in the bid.
+2. Read the governing document in full (read_document) rather than relying on snippets.
+3. For anything visual — site plans, profiles, sections, details — call view_drawing_pages. Read the callouts, legends, and dimensions directly off the drawing.
+4. BEFORE finalizing any answer about scope, quantity, material, or contractor responsibility, call find_addendum_changes on the topic. Addenda supersede base documents. Missing this is the single most common estimating error.
+5. Cross-reference. A complete answer almost always pulls from two or more documents (plan + spec + addendum, or drawing + detail + manufacturer manual).
 
-WHAT THE BID DOCUMENTS CONTAIN:
-- Specifications (testing requirements, material standards, submittals, QA/QC)
-- Contract terms (LDs, bonding, insurance, retainage, payment terms)
-- Scope of work (what's included, exclusions, alternates)
-- Addenda and clarifications
-- Bid schedules and pay items
-- RFIs and owner responses
+WHAT TO OUTPUT:
+- Lead with a direct, organized answer. Break it into logical parts (e.g., separate products, separate disciplines).
+- For each fact, cite the source using the exact format [Filename | Section] or [Drawing Number | Sheet/Detail]. Citations must be specific enough that the estimator can click through to the source.
+- Always flag commercial risks proactively: supersession between base docs and addenda, "by others" language that may have been superseded, furnish-vs-install-only ambiguity, missing quantities on drawings that will require RFI or takeoff, unclear contractor responsibility.
+- When the documents don't give you a tabulated quantity but a location is shown on drawings, say so explicitly and offer to do a scaled takeoff in a follow-up.
+- When something is ambiguous enough to warrant an RFI, recommend it in one sentence.
+- Offer a follow-up action the user can approve. ("If you want, I can pull up C001/C002/C003 at scale and measure the runs for a defensible takeoff number.")
 
-WHEN YOU DO USE SQL (for historical comparisons):
-""" + """- For rates: JOIN rate_item ri → rate_card rc ON ri.card_id = rc.card_id → job j ON rc.job_id = j.job_id
+HARD RULES:
+- Never invent numbers. Every quantity, dimension, price, and reference must come from a tool result.
+- Never add % adjustments, contingencies, or scaling factors. The estimator owns risk.
+- Never hallucinate a drawing number, spec section, or addendum reference. If you cite it, you must have retrieved it.
+- When you don't know, say so, then propose how to find out.
+
+WHEN USING run_sql FOR HISTORICAL COMPARISONS:
+- For rates: JOIN rate_item ri → rate_card rc ON ri.card_id = rc.card_id → job j ON rc.job_id = j.job_id
 - For raw actuals: Query hj_costcode cc JOIN job j ON cc.job_id = j.job_id
-- For PM context: pm_context (job level), cc_context (cost code level) — join via job_id
-- For estimates: hb_estimate → hb_biditem → hb_activity → hb_resource (join via estimate_id)
-- For crew details: Query hj_timecard grouped by pay_class_code (ALWAYS filter by job_id + cost_code)
 - Always include job_number and job name in results so you can cite sources
-- Use LIMIT to keep results manageable
 - ⚠️ hj_timecard (324K rows) is large — ALWAYS filter by job_id
-
-HARD RULES — NEVER BREAK THESE:
-- ONLY use numbers from bid documents or your SQL query results. No extrapolation. No inventing numbers.
-- NEVER add % adjustments, contingencies, scaling factors, or risk buffers.
-- NEVER provide unsolicited recommendations, next steps, or guidance.
-- If data doesn't exist in the documents or database, say so in one sentence. Stop there.
-- The estimator decides risk, assumptions, and adjustments — not you.
-
-RESPONSE FORMAT:
-- Lead with a direct answer sourced from the bid documents
-- Cite EVERY claim with the format: [Filename | Section] — always use this exact bracket format so citations can be linked to source documents
-- Use a markdown table when showing multiple items
-- Keep it concise — the estimator will ask follow-ups if they want more
 
 """ + SCHEMA_DESCRIPTION
 
@@ -1222,36 +1238,41 @@ def _build_vector_context(bid_id: int, message: str) -> tuple[str, list[dict]]:
         if results:
             lines = ["\n\n--- Relevant Bid Document Excerpts ---"]
             seen_files = set()
-            for r in results:
-                header = f"\n[{r.get('filename', '?')}"
-                if r.get("section_heading"):
-                    header += f" | {r['section_heading']}"
-                header += "]"
-                lines.append(header)
-                lines.append(r.get("chunk_text", ""))
 
-                # Build source citation (dedupe by filename + section)
-                source_key = (r.get("filename", ""), r.get("section_heading", ""))
-                if source_key not in seen_files:
-                    seen_files.add(source_key)
-                    # Look up file_path from bid_documents for clickable links
-                    doc_file_path = None
-                    fname = r.get("filename", "")
-                    if fname:
-                        doc_row = conn.execute(
-                            "SELECT file_path, dropbox_path FROM bid_documents WHERE bid_id = ? AND filename = ? LIMIT 1",
-                            (bid_id, fname),
-                        ).fetchone()
-                        if doc_row:
-                            doc_file_path = doc_row["file_path"] or doc_row["dropbox_path"]
-                    vector_sources.append({
-                        "source_type": "document",
-                        "filename": fname or "Unknown",
-                        "section": r.get("section_heading", ""),
-                        "doc_category": r.get("doc_category", ""),
-                        "distance": r.get("distance"),
-                        "file_path": doc_file_path,
-                    })
+            # Look up file_path from bid_documents for clickable source links
+            conn = get_connection()
+            try:
+                for r in results:
+                    header = f"\n[{r.get('filename', '?')}"
+                    if r.get("section_heading"):
+                        header += f" | {r['section_heading']}"
+                    header += "]"
+                    lines.append(header)
+                    lines.append(r.get("chunk_text", ""))
+
+                    # Build source citation (dedupe by filename + section)
+                    source_key = (r.get("filename", ""), r.get("section_heading", ""))
+                    if source_key not in seen_files:
+                        seen_files.add(source_key)
+                        doc_file_path = None
+                        fname = r.get("filename", "")
+                        if fname:
+                            doc_row = conn.execute(
+                                "SELECT file_path, dropbox_path FROM bid_documents WHERE bid_id = ? AND filename = ? LIMIT 1",
+                                (bid_id, fname),
+                            ).fetchone()
+                            if doc_row:
+                                doc_file_path = doc_row["file_path"] or doc_row["dropbox_path"]
+                        vector_sources.append({
+                            "source_type": "document",
+                            "filename": fname or "Unknown",
+                            "section": r.get("section_heading", ""),
+                            "doc_category": r.get("doc_category", ""),
+                            "distance": r.get("distance"),
+                            "file_path": doc_file_path,
+                        })
+            finally:
+                conn.close()
             context_parts.append("\n".join(lines))
 
         # Historical search (opt-in via trigger words)
@@ -1276,16 +1297,15 @@ def _build_vector_context(bid_id: int, message: str) -> tuple[str, list[dict]]:
     return "", vector_sources
 
 
-def send_message(conversation_id: int | None, message: str, bid_id: int | None = None) -> dict:
-    """Main chat entry point — process a user message and return AI response.
+def send_message(conversation_id: int | None, message: str, bid_id: int | None = None, deep_mode: bool = False) -> dict:
+    """Main chat entry point — agentic tool-use loop with Claude.
 
-    Uses Claude tool-use loop: Claude calls run_sql to query the database
-    directly, then assembles a response from the results.
+    Bid chat: Claude has document browsing tools (list, read, view, search, addenda)
+    and decides what to open. No pre-loaded vector context — Claude searches on demand.
 
-    If bid_id is provided, vector search augments the system prompt with
-    relevant bid document excerpts.
+    Historical chat: Claude has SQL + job browsing tools.
 
-    Returns dict with response, sources, conversation_id.
+    Returns dict with response, sources, conversation_id, tool_events.
     """
     if not ANTHROPIC_API_KEY:
         return {
@@ -1332,49 +1352,42 @@ def send_message(conversation_id: int | None, message: str, bid_id: int | None =
             (conversation_id,),
         ).fetchall()
         history = [{"role": r["role"], "content": r["content"]} for r in reversed(history_rows)]
-        # Prior messages (excluding the one we just saved)
         prior_messages = history[:-1] if len(history) > 1 else []
         prior_messages = prior_messages[-10:]
 
-        # 3b. Vector search context — bid documents + optional historical
-        effective_system = SYSTEM_PROMPT
-        vector_sources = []
-        if bid_id:
-            # ALWAYS use bid-focused prompt when bid_id is provided.
-            # The bid chat is a closed system scoped to this bid's documents.
-            bid_context = ""
-            from app.config import VECTOR_SEARCH_ENABLED
-            if VECTOR_SEARCH_ENABLED:
-                bid_context, vector_sources = _build_vector_context(bid_id, message)
-            effective_system = BID_SYSTEM_PROMPT
-            if bid_context:
-                effective_system += bid_context
-            else:
-                effective_system += "\n\n(No matching document excerpts found for this query. Answer based on any prior context in this conversation, or let the user know you need more specific terms to search the bid documents.)"
+        # 4. Select model, system prompt, and tools based on context
+        model = _select_model(message, bid_id, deep_mode)
+        context = "bid" if bid_id else "historical"
+        effective_system = BID_SYSTEM_PROMPT if bid_id else SYSTEM_PROMPT
+        tool_definitions = get_anthropic_definitions(context)
+        max_iterations = MAX_TOOL_CALLS_BID if bid_id else MAX_TOOL_CALLS_HISTORICAL
 
-        # 4. Build Claude API messages
+        # Inject bid_id hint so Claude knows which bid to pass to tools
+        if bid_id:
+            effective_system += f"\n\nACTIVE BID ID: {bid_id} — pass this as bid_id to all bid document tools."
+
+        # 5. Build Claude API messages
         api_messages = []
         for msg in prior_messages:
             api_messages.append({"role": msg["role"], "content": msg["content"]})
         api_messages.append({"role": "user", "content": message})
 
-        # 5. Call Claude with tool-use loop
+        # 6. Agentic tool-use loop
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        executed_queries = []
+        tool_events = []  # Track what Claude did for the frontend
+        all_sources = []
         ai_content = ""
 
-        for iteration in range(MAX_TOOL_CALLS + 1):
+        for iteration in range(max_iterations + 1):
             response = client.messages.create(
-                model=MODEL,
-                max_tokens=4096,
+                model=model,
+                max_tokens=8192,
                 system=effective_system,
-                tools=[TOOL_DEFINITION],
+                tools=tool_definitions,
                 messages=api_messages,
             )
 
-            # Check if Claude wants to use a tool
             if response.stop_reason == "tool_use":
-                # Process all tool use blocks in this response
                 tool_results = []
                 assistant_content = []
 
@@ -1388,43 +1401,63 @@ def send_message(conversation_id: int | None, message: str, bid_id: int | None =
                             "name": block.name,
                             "input": block.input,
                         })
-                        # Execute the SQL query
-                        query = block.input.get("query", "")
-                        logger.info("Chat SQL [iter %d]: %s", iteration, query[:200])
-                        result = execute_sql(query)
-                        executed_queries.append({"query": query, "result": result})
 
-                        # Format result for Claude
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": _format_sql_result(result),
-                        })
+                        # Execute via tool registry
+                        tool = get_tool_by_name(block.name)
+                        if tool:
+                            logger.info("Chat tool [iter %d]: %s(%s)", iteration, block.name, str(block.input)[:150])
+                            result = tool.execute(**block.input)
+                            formatted = tool.format_for_claude(result)
 
-                # Append assistant message with tool use
+                            # Track tool event for frontend
+                            event_desc = _describe_tool_event(block.name, block.input, result)
+                            tool_events.append({"tool": block.name, "description": event_desc, "iteration": iteration})
+
+                            # Extract sources from tool results
+                            _collect_sources(block.name, block.input, result, all_sources)
+
+                            # Build tool result content (supports multi-block for PDF vision)
+                            if isinstance(formatted, list):
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": formatted,
+                                })
+                            else:
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": str(formatted),
+                                })
+                        else:
+                            logger.warning("Unknown tool: %s", block.name)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": f"Error: unknown tool '{block.name}'",
+                                "is_error": True,
+                            })
+
                 api_messages.append({"role": "assistant", "content": assistant_content})
-                # Append tool results
                 api_messages.append({"role": "user", "content": tool_results})
 
             else:
-                # Claude is done — extract text response
                 ai_content = "\n".join(
                     block.text for block in response.content if block.type == "text"
                 )
                 break
         else:
-            # Hit max iterations — force a final text response.
-            # Add a user nudge so Claude knows to synthesize what it has.
+            # Hit max iterations — force synthesis
             api_messages.append({
                 "role": "user",
-                "content": [{"type": "text", "text": "Please provide your answer now based on the data you've already gathered. No more queries needed."}],
+                "content": [{"type": "text", "text": "Please provide your answer now based on the data you've already gathered. No more tool calls needed."}],
             })
             try:
                 final_response = client.messages.create(
-                    model=MODEL,
-                    max_tokens=4096,
-                    system=SYSTEM_PROMPT,
-                    tools=[TOOL_DEFINITION],
+                    model=model,
+                    max_tokens=8192,
+                    system=effective_system,
+                    tools=tool_definitions,
                     tool_choice={"type": "none"},
                     messages=api_messages,
                 )
@@ -1434,13 +1467,12 @@ def send_message(conversation_id: int | None, message: str, bid_id: int | None =
             except Exception:
                 ai_content = "\n".join(
                     block.text for block in response.content if block.type == "text"
-                ) or "I ran out of query attempts. Please try a more specific question."
+                ) or "I ran out of tool attempts. Please try a more specific question."
 
-        # 6. Build source metadata from executed queries + vector search
-        sources = vector_sources + _extract_sources_from_queries(executed_queries)
-        sources_json = json.dumps(sources) if sources else None
+        # 7. Build source metadata
+        sources_json = json.dumps(all_sources) if all_sources else None
 
-        # 7. Save AI response
+        # 8. Save AI response
         conn.execute(
             "INSERT INTO chat_messages (conversation_id, role, content, sources_json, created_at) "
             "VALUES (?, 'assistant', ?, ?, ?)",
@@ -1469,7 +1501,9 @@ def send_message(conversation_id: int | None, message: str, bid_id: int | None =
         return {
             "conversation_id": conversation_id,
             "response": ai_content,
-            "sources": sources,
+            "sources": all_sources,
+            "tool_events": tool_events,
+            "model": model,
             "title": title or "New Conversation",
         }
 
@@ -1569,6 +1603,87 @@ def _extract_sources_from_queries(executed_queries: list[dict]) -> list[dict]:
                 return sources
 
     return sources
+
+
+def _describe_tool_event(tool_name: str, tool_input: dict, result: Any) -> str:
+    """Generate a human-readable description of a tool call for the frontend."""
+    if tool_name == "run_sql":
+        query = tool_input.get("query", "")[:80]
+        return f"Running SQL query: {query}..."
+    elif tool_name == "list_bid_documents":
+        cat = tool_input.get("category", "all")
+        count = len(result) if isinstance(result, list) else 0
+        return f"Listing {cat} documents ({count} found)"
+    elif tool_name == "read_document":
+        fname = result.get("filename", "?") if isinstance(result, dict) else "?"
+        return f"Reading {fname}"
+    elif tool_name == "view_drawing_pages":
+        fname = result.get("filename", "?") if isinstance(result, dict) else "?"
+        pages = tool_input.get("pages", [])
+        return f"Viewing {fname} pages {pages}"
+    elif tool_name == "search_bid_documents":
+        query = tool_input.get("query", "")[:60]
+        count = len(result) if isinstance(result, list) else 0
+        return f"Searching documents for '{query}' ({count} results)"
+    elif tool_name == "list_addenda":
+        count = len(result) if isinstance(result, list) else 0
+        return f"Listing addenda ({count} found)"
+    elif tool_name == "find_addendum_changes":
+        topic = tool_input.get("topic", "?")[:50]
+        count = len(result) if isinstance(result, list) else 0
+        return f"Checking addenda for '{topic}' ({count} matches)"
+    elif tool_name == "list_historical_jobs":
+        count = len(result) if isinstance(result, list) else 0
+        return f"Browsing historical jobs ({count} found)"
+    return f"{tool_name}({str(tool_input)[:60]})"
+
+
+def _collect_sources(tool_name: str, tool_input: dict, result: Any, sources: list[dict]):
+    """Extract source citations from tool results and append to sources list."""
+    if tool_name == "run_sql" and isinstance(result, dict):
+        # Use existing SQL source extractor
+        sql_sources = _extract_sources_from_queries([{"query": tool_input.get("query", ""), "result": result}])
+        sources.extend(sql_sources)
+    elif tool_name == "read_document" and isinstance(result, dict) and not result.get("error"):
+        sources.append({
+            "source_type": "document",
+            "filename": result.get("filename", ""),
+            "doc_category": result.get("doc_category", ""),
+        })
+    elif tool_name == "view_drawing_pages" and isinstance(result, dict) and not result.get("error"):
+        pages = result.get("pages_returned", [])
+        page_str = ", ".join(str(p) for p in pages)
+        sources.append({
+            "source_type": "document",
+            "filename": result.get("filename", ""),
+            "section": f"Pages {page_str}" if pages else "",
+        })
+    elif tool_name == "search_bid_documents" and isinstance(result, list):
+        seen = set()
+        for r in result:
+            fname = r.get("filename", "")
+            if fname and fname not in seen:
+                seen.add(fname)
+                sources.append({
+                    "source_type": "document",
+                    "filename": fname,
+                    "section": r.get("section_heading", ""),
+                    "doc_category": r.get("doc_category", ""),
+                })
+    elif tool_name in ("list_addenda", "find_addendum_changes") and isinstance(result, list):
+        for r in result:
+            fname = r.get("filename", "")
+            if fname:
+                sources.append({
+                    "source_type": "document",
+                    "filename": fname,
+                    "section": r.get("section_heading", ""),
+                    "doc_category": "addendum",
+                })
+
+
+# Need this import for type hints in the new functions
+from typing import Any
 
 
 def _has_pm_context(job_id: int, cost_code: str) -> bool:

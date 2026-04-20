@@ -25,7 +25,8 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 class SendMessageRequest(BaseModel):
     conversation_id: int | None = None
     message: str
-    bid_id: int | None = None  # Optional: active bid context for vector search
+    bid_id: int | None = None  # Optional: active bid context for document tools
+    deep_mode: bool = False  # Use Opus for deeper reasoning
 
 
 # ── Routes ──
@@ -40,7 +41,7 @@ def chat_send(req: SendMessageRequest):
     if not req.message or not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     try:
-        result = send_message(req.conversation_id, req.message.strip(), bid_id=req.bid_id)
+        result = send_message(req.conversation_id, req.message.strip(), bid_id=req.bid_id, deep_mode=req.deep_mode)
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])
         return result

@@ -1626,14 +1626,18 @@ async function renderChat() {
                 <div class="chat-messages" id="chatMessages"></div>
                 <div class="chat-input-area">
                     <div class="chat-input-wrap">
-                        <textarea id="chatInput" class="chat-input" placeholder="${state.chatBidId ? 'Ask about this bid — specs, contracts, documents...' : 'Ask about historical rates, crews, production...'}" rows="1"
+                        <textarea id="chatInput" class="chat-input" placeholder="${state.chatBidId ? 'Ask about documents, specs, quantities, requirements...' : 'Ask about historical rates, crews, production...'}" rows="1"
                             onkeydown="chatInputKeydown(event)"></textarea>
                         <button class="chat-send-btn" id="chatSendBtn" onclick="chatSend()">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                         </button>
                     </div>
-                    <div class="chat-input-meta">
-                        ${summary ? `<span>${fmt(summary.total_jobs)} jobs &middot; ${fmt(summary.total_rate_items)} rate items &middot; ${fmt(summary.total_timecards)} timecards</span>` : ''}
+                    <div class="chat-input-meta" style="display:flex;align-items:center;justify-content:space-between;">
+                        <span style="font-size:11px;color:var(--text-tertiary);">${summary ? `${fmt(summary.total_jobs)} jobs &middot; ${fmt(summary.total_rate_items)} rate items` : ''}</span>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary);cursor:pointer;user-select:none;" title="Uses Opus — slower but deeper multi-document reasoning">
+                            <input type="checkbox" id="deepAnalysisToggle" style="margin:0;accent-color:var(--wollam-navy);">
+                            Deep Analysis
+                        </label>
                     </div>
                 </div>
             </div>
@@ -1736,27 +1740,62 @@ function renderChatMessages() {
         renderChatWelcome();
         return;
     }
-    el.innerHTML = state.chatMessages.map(m => {
+    el.innerHTML = state.chatMessages.map((m, idx) => {
         if (m.role === 'user') {
             return `<div class="chat-msg chat-msg-user"><div class="chat-msg-bubble chat-msg-user-bubble">${escHtml(m.content)}</div></div>`;
         }
         // AI message — render markdown-ish content
         const html = renderMarkdown(m.content);
+
+        // Tool events summary (collapsible)
+        const toolEvents = m.tool_events || [];
+        let toolHtml = '';
+        if (toolEvents.length > 0) {
+            const toolIcons = { search_bid_documents: '&#128269;', read_document: '&#128196;', view_drawing_pages: '&#128444;', list_bid_documents: '&#128203;', list_addenda: '&#128203;', find_addendum_changes: '&#128269;', run_sql: '&#128190;', list_historical_jobs: '&#128203;' };
+            toolHtml = `
+                <div class="chat-tool-events" style="margin-bottom:8px;font-size:11px;">
+                    <div onclick="this.parentElement.classList.toggle('expanded')" style="color:var(--text-tertiary);cursor:pointer;display:flex;align-items:center;gap:4px;padding:4px 0;">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                        <span style="font-weight:500;">${toolEvents.length} tool call${toolEvents.length !== 1 ? 's' : ''}</span>
+                        ${m.model && m.model !== 'claude-haiku-4-5-20251001' ? `<span class="badge" style="font-size:9px;padding:1px 5px;background:var(--wollam-navy);color:white;margin-left:4px;">${m.model.includes('opus') ? 'OPUS' : 'SONNET'}</span>` : ''}
+                    </div>
+                    <div class="chat-tool-events-list" style="display:none;padding:4px 0 4px 16px;border-left:2px solid var(--border-default);">
+                        ${toolEvents.map(e => `<div style="padding:2px 0;color:var(--text-secondary);">${toolIcons[e.tool] || '&#9881;'} ${escHtml(e.description)}</div>`).join('')}
+                    </div>
+                </div>`;
+        }
+
         const sources = m.sources || [];
         let sourcesHtml = '';
         if (sources.length > 0) {
+            // Deduplicate sources by filename
+            const seen = new Set();
+            const uniqueSources = sources.filter(s => {
+                const key = (s.filename || s.job_number || '') + '|' + (s.section || s.cost_code || '');
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
             sourcesHtml = `
                 <div class="chat-sources">
                     <div class="chat-sources-label" onclick="this.parentElement.classList.toggle('expanded')">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                        Sources (${sources.length})
+                        Sources (${uniqueSources.length})
                     </div>
                     <div class="chat-sources-list">
-                        ${sources.map(s => {
+                        ${uniqueSources.map(s => {
                             if (s.source_type === 'document') {
-                                return `<span class="chat-source-badge badge-document" title="${escHtml(s.section || '')}">
+                                const fileUrl = s.file_path ? 'file:///' + s.file_path.replace(/\\\\/g, '/').replace(/ /g, '%20') : null;
+                                const label = escHtml(s.filename || 'Document') + (s.section ? ' &middot; ' + escHtml(s.section) : '');
+                                if (fileUrl) {
+                                    return `<a href="${escAttr(fileUrl)}" target="_blank" class="chat-source-badge badge-document" title="${escHtml(s.doc_category || '')}" style="text-decoration:none;">
+                                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                        ${label}
+                                    </a>`;
+                                }
+                                return `<span class="chat-source-badge badge-document" title="${escHtml(s.doc_category || '')}">
                                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                                    ${escHtml(s.filename || 'Document')}${s.section ? ' &middot; ' + escHtml(s.section) : ''}
+                                    ${label}
                                 </span>`;
                             }
                             if (s.source_type === 'estimate') {
@@ -1773,7 +1812,14 @@ function renderChatMessages() {
                 </div>
             `;
         }
-        return `<div class="chat-msg chat-msg-ai"><div class="chat-msg-bubble chat-msg-ai-bubble">${html}${sourcesHtml}</div></div>`;
+
+        // Re-run with Deep Analysis button (only if not already deep)
+        let rerunHtml = '';
+        if (m.original_message && (!m.model || !m.model.includes('opus'))) {
+            rerunHtml = `<div style="margin-top:6px;"><button onclick="chatRerunDeep(${idx})" class="btn btn-sm" style="font-size:10px;padding:2px 8px;color:var(--text-tertiary);border-color:var(--border-default);">Re-run with Deep Analysis</button></div>`;
+        }
+
+        return `<div class="chat-msg chat-msg-ai"><div class="chat-msg-bubble chat-msg-ai-bubble">${toolHtml}${html}${sourcesHtml}${rerunHtml}</div></div>`;
     }).join('');
 
     // Show loading indicator if waiting
@@ -1863,12 +1909,14 @@ async function chatSend() {
     renderChatMessages();
 
     try {
+        const deepMode = document.getElementById('deepAnalysisToggle')?.checked || false;
         const result = await api('/chat/send', {
             method: 'POST',
             body: JSON.stringify({
                 conversation_id: state.chatConversationId,
                 message: message,
                 bid_id: state.chatBidId || undefined,
+                deep_mode: deepMode,
             }),
         });
 
@@ -1877,6 +1925,9 @@ async function chatSend() {
             role: 'assistant',
             content: result.response,
             sources: result.sources || [],
+            tool_events: result.tool_events || [],
+            model: result.model || '',
+            original_message: message,
         });
 
         // Update conversation list (main chat shows all conversations)
@@ -1906,6 +1957,22 @@ function chatInputKeydown(e) {
         e.preventDefault();
         chatSend();
     }
+}
+
+async function chatRerunDeep(msgIdx) {
+    // Find the original user message for this response
+    const msg = state.chatMessages[msgIdx];
+    if (!msg || !msg.original_message) return;
+
+    // Remove the old response
+    state.chatMessages.splice(msgIdx, 1);
+
+    // Re-send with deep mode
+    const input = document.getElementById('chatInput');
+    if (input) input.value = msg.original_message;
+    const toggle = document.getElementById('deepAnalysisToggle');
+    if (toggle) toggle.checked = true;
+    chatSend();
 }
 
 async function chatLoadConversation(convId) {
@@ -2579,11 +2646,20 @@ function resolveDocumentLink(bidId, reference) {
     return null;
 }
 
-function renderDocCitation(text, url) {
+function renderDocCitation(text, url, fontSize) {
+    const sz = fontSize || '12px';
     if (url) {
-        return `<a href="${escAttr(url)}" target="_blank" style="color:var(--wollam-navy);text-decoration:none;font-size:12px;" title="Open file">&#128196; ${escHtml(text)}</a>`;
+        return `<a href="${escAttr(url)}" target="_blank" style="color:var(--wollam-navy);text-decoration:none;font-size:${sz};" title="Open file">&#128196; ${escHtml(text)}</a>`;
     }
-    return `<span style="font-size:12px;color:var(--text-secondary);">&#128196; ${escHtml(text)}</span>`;
+    return `<span style="font-size:${sz};color:var(--text-secondary);">&#128196; ${escHtml(text)}</span>`;
+}
+
+function resolveSpecLink(bidId, specSection) {
+    // Extract spec number prefix (e.g. "01 31 20C" from "01 31 20C Section 4.11 ...")
+    if (!specSection) return null;
+    const prefix = specSection.match(/^[\d]{2}\s[\d]{2}\s[\d]{2}[A-Z]?\d*/);
+    if (!prefix) return null;
+    return resolveDocumentLink(bidId, prefix[0]);
 }
 
 function docCategoryBadge(cat) {
@@ -3194,7 +3270,7 @@ async function showCostDetail(bidId) {
 
 async function renderBidOverview(bid) {
     const tc = document.getElementById('bidTabContent');
-    const summary = [bid.bid_name, bid.owner ? `Owner: ${bid.owner}` : '', bid.bid_date ? `Due: ${bid.bid_date}${bid.bid_due_time ? ' ' + bid.bid_due_time : ''}` : '', bidStatusBadge(bid.status)].filter(Boolean).join(' | ');
+    const summary = [bid.bid_name, bid.owner ? `Owner: ${bid.owner}` : '', bid.bid_date ? `Due: ${bid.bid_date}${bid.bid_due_time ? ' ' + bid.bid_due_time : ''}` : '', bid.status || ''].filter(Boolean).join(' | ');
 
     // Load bid conversations
     const convos = await api(`/chat/conversations?bid_id=${bid.id}`).catch(() => []);
@@ -3290,6 +3366,12 @@ async function renderBidOverview(bid) {
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                         </button>
                     </div>
+                    <div style="display:flex;justify-content:flex-end;margin-top:4px;">
+                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary);cursor:pointer;user-select:none;" title="Uses Opus — slower but deeper multi-document reasoning">
+                            <input type="checkbox" id="bidDeepAnalysisToggle" style="margin:0;accent-color:var(--wollam-navy);">
+                            Deep Analysis
+                        </label>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3343,28 +3425,57 @@ function renderBidChatMessages(bidId) {
         return;
     }
     // Reuse the same message rendering logic as the main chat
-    el.innerHTML = state.chatMessages.map(m => {
+    el.innerHTML = state.chatMessages.map((m, idx) => {
         if (m.role === 'user') {
             return `<div class="chat-msg chat-msg-user"><div class="chat-msg-bubble chat-msg-user-bubble">${escHtml(m.content)}</div></div>`;
         }
         const html = renderMarkdown(m.content);
+
+        // Tool events summary
+        const toolEvents = m.tool_events || [];
+        let toolHtml = '';
+        if (toolEvents.length > 0) {
+            const toolIcons = { search_bid_documents: '&#128269;', read_document: '&#128196;', view_drawing_pages: '&#128444;', list_bid_documents: '&#128203;', list_addenda: '&#128203;', find_addendum_changes: '&#128269;', run_sql: '&#128190;', list_historical_jobs: '&#128203;' };
+            toolHtml = `<div class="chat-tool-events" style="margin-bottom:8px;font-size:11px;">
+                <div onclick="this.parentElement.classList.toggle('expanded')" style="color:var(--text-tertiary);cursor:pointer;display:flex;align-items:center;gap:4px;padding:4px 0;">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    <span style="font-weight:500;">${toolEvents.length} tool call${toolEvents.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div class="chat-tool-events-list" style="display:none;padding:4px 0 4px 16px;border-left:2px solid var(--border-default);">
+                    ${toolEvents.map(e => `<div style="padding:2px 0;color:var(--text-secondary);">${toolIcons[e.tool] || '&#9881;'} ${escHtml(e.description)}</div>`).join('')}
+                </div>
+            </div>`;
+        }
+
         const sources = m.sources || [];
         let sourcesHtml = '';
         if (sources.length > 0) {
+            const seen = new Set();
+            const uniqueSources = sources.filter(s => {
+                const key = (s.filename || s.job_number || '') + '|' + (s.section || s.cost_code || '');
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
             sourcesHtml = `<div class="chat-sources">
                 <div class="chat-sources-label" onclick="this.parentElement.classList.toggle('expanded')">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                    Sources (${sources.length})
+                    Sources (${uniqueSources.length})
                 </div>
                 <div class="chat-sources-list">
-                    ${sources.map(s => {
+                    ${uniqueSources.map(s => {
                         if (s.source_type === 'document') {
                             const fileUrl = s.file_path ? 'file:///' + s.file_path.replace(/\\\\/g, '/').replace(/ /g, '%20') : null;
-                            const linkTag = fileUrl ? `<a href="${escAttr(fileUrl)}" target="_blank" style="color:inherit;text-decoration:none;" title="Open in Dropbox">` : '<span>';
-                            const closeTag = fileUrl ? '</a>' : '</span>';
+                            const label = escHtml(s.filename || 'Document') + (s.section ? ' &middot; ' + escHtml(s.section) : '');
+                            if (fileUrl) {
+                                return `<a href="${escAttr(fileUrl)}" target="_blank" class="chat-source-badge badge-document" style="text-decoration:none;">
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                    ${label}
+                                </a>`;
+                            }
                             return `<span class="chat-source-badge badge-document">
                                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                                ${linkTag}${escHtml(s.filename || 'Document')}${s.section ? ' &middot; ' + escHtml(s.section) : ''}${closeTag}
+                                ${label}
                             </span>`;
                         }
                         if (s.source_type === 'estimate') {
@@ -3375,7 +3486,7 @@ function renderBidChatMessages(bidId) {
                 </div>
             </div>`;
         }
-        return `<div class="chat-msg chat-msg-ai"><div class="chat-msg-bubble chat-msg-ai-bubble">${html}${sourcesHtml}</div></div>`;
+        return `<div class="chat-msg chat-msg-ai"><div class="chat-msg-bubble chat-msg-ai-bubble">${toolHtml}${html}${sourcesHtml}</div></div>`;
     }).join('');
 
     if (state.chatLoading) {
@@ -3396,16 +3507,18 @@ async function bidChatSend(bidId) {
     renderBidChatMessages(bidId);
 
     try {
+        const deepMode = document.getElementById('bidDeepAnalysisToggle')?.checked || false;
         const result = await api('/chat/send', {
             method: 'POST',
             body: JSON.stringify({
                 conversation_id: state.chatConversationId,
                 message: message,
                 bid_id: bidId,
+                deep_mode: deepMode,
             }),
         });
         state.chatConversationId = result.conversation_id;
-        state.chatMessages.push({ role: 'assistant', content: result.response, sources: result.sources || [] });
+        state.chatMessages.push({ role: 'assistant', content: result.response, sources: result.sources || [], tool_events: result.tool_events || [], model: result.model || '', original_message: message });
 
         // Refresh conversation list
         state.chatConversations = await api(`/chat/conversations?bid_id=${bidId}`).catch(() => []);
@@ -4256,9 +4369,12 @@ async function renderDocRegisters(bid) {
                         </tr>
                     </thead>
                     <tbody>
-                        ${drawings.map(d => `
+                        ${drawings.map(d => {
+                            const fp = d.source_file_path || d.source_dropbox_path;
+                            const dUrl = fp ? 'file:///' + fp.replace(/\\/g, '/').replace(/ /g, '%20') : null;
+                            return `
                         <tr style="border-bottom:1px solid var(--border-default);">
-                            <td style="padding:6px 10px;font-family:monospace;font-weight:500;">${escHtml(d.drawing_number)}</td>
+                            <td style="padding:6px 10px;font-family:monospace;font-weight:500;">${dUrl ? `<a href="${escAttr(dUrl)}" target="_blank" style="color:var(--wollam-navy);text-decoration:none;" title="Open source: ${escAttr(d.source_filename || '')}">&#128196; ${escHtml(d.drawing_number)}</a>` : escHtml(d.drawing_number)}</td>
                             <td style="padding:6px 10px;">${escHtml(d.title || '—')}</td>
                             <td style="padding:6px 10px;color:var(--text-secondary);">${escHtml(d.discipline || '—')}</td>
                             <td style="padding:6px 10px;text-align:center;font-family:monospace;">${escHtml(d.revision || '0')}${d.previous_revision ? ` <span style="font-size:10px;color:var(--text-tertiary);" title="Was Rev ${escAttr(d.previous_revision)}">&#8592;${escHtml(d.previous_revision)}</span>` : ''}</td>
@@ -4269,7 +4385,8 @@ async function renderDocRegisters(bid) {
                                 ${d.is_revised ? '<span class="badge" style="background:#f59e0b;color:white;font-size:9px;padding:1px 5px;">REVISED</span>' : ''}
                                 ${!d.is_new && !d.is_revised ? '<span style="color:var(--text-tertiary);font-size:10px;">—</span>' : ''}
                             </td>
-                        </tr>`).join('')}
+                        </tr>`;
+                        }).join('')}
                     </tbody>
                 </table>
             </div>`}
@@ -4290,9 +4407,12 @@ async function renderDocRegisters(bid) {
                         </tr>
                     </thead>
                     <tbody>
-                        ${specs.map(s => `
+                        ${specs.map(s => {
+                            const fp = s.source_file_path || s.source_dropbox_path;
+                            const sUrl = fp ? 'file:///' + fp.replace(/\\/g, '/').replace(/ /g, '%20') : null;
+                            return `
                         <tr style="border-bottom:1px solid var(--border-default);">
-                            <td style="padding:6px 10px;font-family:monospace;font-weight:500;">${escHtml(s.spec_section)}</td>
+                            <td style="padding:6px 10px;font-family:monospace;font-weight:500;">${sUrl ? `<a href="${escAttr(sUrl)}" target="_blank" style="color:var(--wollam-navy);text-decoration:none;" title="Open source: ${escAttr(s.source_filename || '')}">&#128196; ${escHtml(s.spec_section)}</a>` : escHtml(s.spec_section)}</td>
                             <td style="padding:6px 10px;">${escHtml(s.title || '—')}</td>
                             <td style="padding:6px 10px;color:var(--text-secondary);">${escHtml(s.division || '—')}</td>
                             <td style="padding:6px 10px;text-align:center;">${s.addendum_number || 0}</td>
@@ -4302,7 +4422,8 @@ async function renderDocRegisters(bid) {
                                 ${s.is_revised ? '<span class="badge" style="background:#f59e0b;color:white;font-size:9px;padding:1px 5px;">REVISED</span>' : ''}
                                 ${!s.is_new && !s.is_revised ? '<span style="color:var(--text-tertiary);font-size:10px;">—</span>' : ''}
                             </td>
-                        </tr>`).join('')}
+                        </tr>`;
+                        }).join('')}
                     </tbody>
                 </table>
             </div>`}
@@ -4761,6 +4882,7 @@ function agentStatusIcon(status, isStale) {
 
 async function renderBidIntelligence(bid) {
     const bidId = bid.id;
+    window._currentBid = bid;
     const tc = document.getElementById('bidTabContent');
     tc.innerHTML = '<div class="empty-state"><p>Loading intelligence...</p></div>';
 
@@ -4768,6 +4890,7 @@ async function renderBidIntelligence(bid) {
         const [intel, reports] = await Promise.all([
             api(`/bidding/bids/${bidId}/intelligence-status`),
             api(`/bidding/bids/${bidId}/reports`),
+            loadBidDocCache(bidId),
         ]);
 
         const agents = intel.agents || {};
@@ -4888,7 +5011,7 @@ function renderAgentContent(agentName, agentInfo, report, bidId) {
 
     // Per-agent custom summary at top
     if (agentName === 'legal_analyst') html += renderLegalSummary(rj);
-    else if (agentName === 'qaqc_manager') html += renderQAQCSummary(rj);
+    else if (agentName === 'qaqc_manager') html += renderQAQCSummary(rj, bidId);
     else if (agentName === 'subcontract_manager') html += renderSubSummary(rj);
     else if (agentName === 'document_control') html += renderDocControlSummary(rj);
 
@@ -4961,7 +5084,8 @@ function renderAgentContent(agentName, agentInfo, report, bidId) {
         if (docIndex.length > 0) {
             html += `<div style="margin-bottom:8px;font-size:11px;color:var(--text-secondary);">${docIndex.length} documents reviewed</div>`;
             docIndex.slice(0, 20).forEach(d => {
-                html += `<div style="font-size:11px;padding:2px 0;color:var(--text-tertiary);">${escHtml(d.filename || '')} ${d.category ? `[${escHtml(d.category)}]` : ''}</div>`;
+                const url = resolveDocumentLink(bidId, d.filename);
+                html += `<div style="font-size:11px;padding:2px 0;">${renderDocCitation(d.filename || '', url, '11px')} ${d.category ? docCategoryBadge(d.category) : ''}</div>`;
             });
             if (docIndex.length > 20) html += `<div style="font-size:11px;color:var(--text-tertiary);">... and ${docIndex.length - 20} more</div>`;
         }
@@ -5017,19 +5141,25 @@ function renderLegalSummary(rj) {
     return html;
 }
 
-function renderQAQCSummary(rj) {
+function renderQAQCSummary(rj, bidId) {
     const tests = rj.testing_requirements || [];
     if (tests.length === 0) return '';
     return `<div style="margin-bottom:16px;">
         <div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">Testing Requirements (${tests.length})</div>
         <table style="width:100%;border-collapse:collapse;font-size:11px;">
             <tr style="background:var(--bg-hover);"><th style="padding:4px 8px;text-align:left;">Test</th><th style="padding:4px 8px;text-align:left;">Frequency</th><th style="padding:4px 8px;text-align:left;">Spec</th><th style="padding:4px 8px;text-align:center;">Impact</th></tr>
-            ${tests.map(t => `<tr style="border-bottom:1px solid var(--border-default);">
+            ${tests.map(t => {
+                const specUrl = resolveSpecLink(bidId, t.spec_section);
+                const specCell = specUrl
+                    ? `<a href="${escAttr(specUrl)}" target="_blank" style="color:var(--wollam-navy);text-decoration:none;" title="Open spec">&#128196; ${escHtml(t.spec_section || '')}</a>`
+                    : `<span style="color:var(--text-tertiary);">${escHtml(t.spec_section || '')}</span>`;
+                return `<tr style="border-bottom:1px solid var(--border-default);">
                 <td style="padding:4px 8px;">${escHtml(t.test || '')}</td>
                 <td style="padding:4px 8px;">${escHtml(t.frequency || '')}</td>
-                <td style="padding:4px 8px;color:var(--text-tertiary);">${escHtml(t.spec_section || '')}</td>
+                <td style="padding:4px 8px;">${specCell}</td>
                 <td style="padding:4px 8px;text-align:center;">${t.cost_impact === 'high' ? '<span style="color:var(--danger-red);font-weight:600;">HIGH</span>' : t.cost_impact === 'moderate' ? '<span style="color:#F59E0B;">MOD</span>' : '<span style="color:var(--text-tertiary);">LOW</span>'}</td>
-            </tr>`).join('')}
+            </tr>`;
+            }).join('')}
         </table>
     </div>`;
 }

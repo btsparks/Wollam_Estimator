@@ -1917,6 +1917,12 @@ html, body {
 }
 
 .badge-document { background: rgba(14, 165, 233, 0.10); color: #0369a1; }
+a.badge-document { cursor: pointer; }
+a.badge-document:hover { background: rgba(14, 165, 233, 0.20); }
+
+/* ── Tool Events ── */
+.chat-tool-events.expanded .chat-tool-events-list { display: block !important; }
+.chat-tool-events.expanded svg { transform: rotate(180deg); }
 
 /* ── Chat Bid Selector ── */
 .chat-bid-bar {
